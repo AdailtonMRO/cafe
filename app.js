@@ -427,16 +427,6 @@ async function loadFirebaseData(uid) {
       });
 
     // Parallelize Firestore queries for participations, users list, and limited reviews
-    const isAdmin = appState.profile?.role === 'admin';
-    const participationsPromise = isAdmin
-      ? db.collection('participations').where('groupId', '==', gId).get()
-      : db.collection('participations').where('groupId', '==', gId).where('userId', '==', uid).get();
-
-    const reviewsPromise = db.collection('reviews').orderBy('createdAt', 'desc').limit(10).get();
-
-    // Fetch users of the group if user is group admin or super admin
-    const loadUsers = isAdmin || isPlatformAdmin();
-    const usersPromise = loadUsers
     // Parallelize Firestore queries for participations, users list, products and limited reviews
     const isAdmin = appState.profile?.role === 'admin';
     const participationsPromise = isAdmin
