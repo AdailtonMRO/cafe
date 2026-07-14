@@ -243,6 +243,16 @@ async function initializeFirebase() {
 
   try {
     window.firebase.initializeApp(config);
+    const db = window.firebase.firestore();
+    try {
+      await db.enablePersistence();
+    } catch (err) {
+      if (err.code === 'failed-precondition') {
+        console.warn("Múltiplas abas abertas: persistência offline desativada.");
+      } else if (err.code === 'unimplemented') {
+        console.warn("Navegador não suporta persistência local.");
+      }
+    }
     const conn = await testFirebaseConnection();
     if (conn.success) {
       appState.firebaseMode = true;
@@ -267,14 +277,6 @@ async function initializeFirebase() {
   const auth = window.firebase.auth();
   const db = window.firebase.firestore();
 
-  // Enable offline cache persistence for instant page loads
-  db.enablePersistence().catch((err) => {
-    if (err.code === 'failed-precondition') {
-      console.warn("Múltiplas abas abertas: persistência offline desativada.");
-    } else if (err.code === 'unimplemented') {
-      console.warn("Navegador não suporta persistência local.");
-    }
-  });
 
   auth.onAuthStateChanged(async (user) => {
     appState.loading = true;

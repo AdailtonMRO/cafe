@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coffee-experience-cache-v4';
+const CACHE_NAME = 'coffee-experience-cache-v5';
 const ASSETS = [
   './index.html',
   './styles.css',
@@ -66,7 +66,7 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => {
+      .catch((err) => {
         // Fallback to cache if offline
         return caches.match(event.request).then((cachedResponse) => {
           if (cachedResponse) {
@@ -75,6 +75,7 @@ self.addEventListener('fetch', (event) => {
           if (event.request.mode === 'navigate') {
             return caches.match('./index.html');
           }
+          throw err;
         });
       })
   );
