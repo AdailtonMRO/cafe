@@ -2913,10 +2913,13 @@ function renderUserParticipationsSection() {
         ${mine.map((p) => {
           const order = appState.orders.find((o) => o.id === p.orderId);
           const orderName = order ? order.type : `Pedido encerrado`;
+          const isOrderClosed = order ? order.status !== 'aberto' : true;
           
           let statusText = '⏳ Pag. Pendente';
           if (p.paymentStatus === 'pago') statusText = '✔ Pago';
           if (p.paymentStatus === 'confirmando') statusText = '🔍 Confirmando Pix';
+
+          const canEditOrCancel = p.paymentStatus === 'pendente' && p.pickupStatus !== 'recebido' && !isOrderClosed;
 
           return `
             <article class="order-item" style="border-left:3px solid var(--${p.paymentStatus === 'pago' ? 'success' : (p.paymentStatus === 'confirmando' ? 'warning' : 'error')});">
@@ -2927,6 +2930,13 @@ function renderUserParticipationsSection() {
                   <span class="status-pill ${p.paymentStatus}">${statusText}</span>
                   <span class="status-pill ${p.pickupStatus}">${p.pickupStatus === 'recebido' ? '✔ Recebido' : '📬 Aguardando Retirada'}</span>
                 </div>
+
+                ${canEditOrCancel ? `
+                  <div style="margin-top:0.65rem; display:flex; gap:0.4rem;">
+                    <button class="secondary edit-part-btn" data-part-id="${p.id}" style="font-size:0.7rem; padding:0.25rem 0.6rem; border-radius:4px; border:1px solid var(--border); font-weight:600; cursor:pointer;">✏️ Editar Qtd</button>
+                    <button class="danger delete-part-btn" data-part-id="${p.id}" style="font-size:0.7rem; padding:0.25rem 0.6rem; border-radius:4px; font-weight:600; cursor:pointer;">❌ Desistir</button>
+                  </div>
+                ` : ''}
                 
                 ${p.paymentStatus === 'pendente' && appState.group?.pixKey ? `
                   <div style="margin-top:0.8rem; border-top:1px dashed var(--border); padding-top:0.6rem; display:flex; gap:0.5rem; align-items:end;">
@@ -3048,6 +3058,131 @@ function bindUserEvents() {
       } catch (error) {
         showToast(`Erro ao confirmar: ${error.message}`, 'error');
       }
+    });
+  });
+
+  // Edit quantity of participation
+  document.querySelectorAll('.edit-part-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pId = btn.getAttribute('data-part-id');
+      const participation = appState.participations.find((p) => p.id === pId);
+      if (!participation) return;
+
+      const order = appState.orders.find((o) => o.id === participation.orderId);
+      const pricePerKg = order ? Number(order.pricePerKg) : 0;
+
+      showModal({
+        title: 'Editar Quantidade do Pedido',
+        bodyHtml: `
+          <form id="modalEditPartForm" style="margin-top:0;">
+            <div class="form-group">
+              <label for="editPartQty">Nova Quantidade (kg)</label>
+              <input type="number" id="editPartQty" value="${participation.quantityKg}" min="0.1" step="0.05" required />
+            </div>
+            <p style="font-size:0.8rem; color:var(--muted); margin-top:0.5rem;">
+              Valor unitário: R$ ${pricePerKg.toFixed(2)}/kg.<br/>
+              O valor total será atualizado automaticamente ao confirmar.
+            </p>
+          </form>
+        `,
+        confirmText: 'Salvar Nova Quantidade',
+        onConfirm: async (modalEl) => {
+          const newQty = Number(modalEl.querySelector('#editPartQty').value);
+          if (isNaN(newQty) || newQty <= 0) {
+            showToast('Informe uma quantidade válida.', 'warning');
+            return false;
+          }
+
+          const newValueTotal = calculateTotal(newQty, pricePerKg);
+
+          try {
+            if (appState.firebaseMode) {
+              const db = window.firebase.firestore();
+              
+              // Validate again before update
+              const partDoc = await db.collection('participations').doc(pId).get();
+              if (partDoc.exists) {
+                const latestData = partDoc.data();
+                if (latestData.paymentStatus !== 'pendente' || latestData.pickupStatus === 'recebido') {
+                  showToast('Não é possível alterar uma participação que já foi paga ou entregue.', 'error');
+                  return false;
+                }
+              }
+
+              await db.collection('participations').doc(pId).update({
+                quantityKg: newQty,
+                valueTotal: newValueTotal
+              });
+              await loadFirebaseData(appState.user.uid);
+            } else {
+              appState.participations = appState.participations.map((p) =>
+                p.id === pId ? { ...p, quantityKg: newQty, valueTotal: newValueTotal } : p
+              );
+              saveLocalData();
+            }
+
+            showToast('Quantidade atualizada com sucesso!');
+            render();
+            return true;
+          } catch (err) {
+            showToast(`Erro ao atualizar: ${err.message}`, 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
+
+  // Cancel participation (give up)
+  document.querySelectorAll('.delete-part-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pId = btn.getAttribute('data-part-id');
+      const participation = appState.participations.find((p) => p.id === pId);
+      if (!participation) return;
+
+      showModal({
+        title: 'Desistir da Compra Coletiva',
+        bodyHtml: `
+          <p style="color:var(--text); font-size:0.9rem; line-height:1.5;">
+            Tem certeza de que deseja remover sua cota deste pedido coletivo?
+          </p>
+          <p style="font-size:0.8rem; color:var(--muted); margin-top:0.5rem;">
+            Essa ação é permanente e sua vaga/quantidade será liberada.
+          </p>
+        `,
+        confirmText: 'Confirmar Desistência',
+        cancelText: 'Voltar',
+        onConfirm: async () => {
+          try {
+            if (appState.firebaseMode) {
+              const db = window.firebase.firestore();
+              
+              // Validate again before delete
+              const partDoc = await db.collection('participations').doc(pId).get();
+              if (partDoc.exists) {
+                const latestData = partDoc.data();
+                if (latestData.paymentStatus !== 'pendente' || latestData.pickupStatus === 'recebido') {
+                  showToast('Não é possível excluir uma participação que já foi paga ou entregue.', 'error');
+                  return false;
+                }
+              }
+
+              await db.collection('participations').doc(pId).delete();
+              await loadFirebaseData(appState.user.uid);
+            } else {
+              appState.participations = appState.participations.filter((p) => p.id !== pId);
+              saveLocalData();
+            }
+
+            showToast('Sua participação foi removida.');
+            render();
+            return true;
+          } catch (err) {
+            showToast(`Erro ao desistir: ${err.message}`, 'error');
+            return false;
+          }
+        }
+      });
     });
   });
 }
