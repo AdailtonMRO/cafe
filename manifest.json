@@ -1,0 +1,17 @@
+{
+  "short_name": "CafeColetivo",
+  "name": "Coffee Experience - Compras Coletivas",
+  "icons": [
+    {
+      "src": "assets/coffee-hero.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "./index.html",
+  "background_color": "#0b0604",
+  "theme_color": "#d4903e",
+  "display": "standalone",
+  "orientation": "portrait"
+}

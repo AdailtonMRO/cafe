@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "http-server -p 3000",
     "test": "node --test"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
   }
 }
