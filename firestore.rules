@@ -1,0 +1,81 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper: Is the user authenticated?
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: Get user's profile data
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Helper: Is the user a Platform Super Admin?
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "adailton.medeiros@gmail.com" || 
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          getUserData().email == "adailton.medeiros@gmail.com"));
+    }
+
+    // Helper: Is the user a leader (admin) of the target group?
+    function isGroupAdmin(groupId) {
+      return isAuthenticated() && 
+        (isSuperAdmin() || 
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          getUserData().groupId == groupId && 
+          getUserData().role == 'admin'));
+    }
+
+    // --- RULES FOR COLLECTIONS ---
+
+    // 1. Users Profiles
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
+      allow delete: if isSuperAdmin();
+    }
+
+    // 2. Coffee Buying Groups
+    match /groups/{groupId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (isSuperAdmin() || getUserData().canCreateGroup == true);
+      allow update: if isAuthenticated() && (isSuperAdmin() || resource.data.adminId == request.auth.uid);
+      allow delete: if isSuperAdmin();
+    }
+
+    // 3. Collective Coffee Orders
+    match /orders/{orderId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isGroupAdmin(request.resource.data.groupId);
+      allow update: if isAuthenticated() && isGroupAdmin(resource.data.groupId);
+      allow delete: if isAuthenticated() && isGroupAdmin(resource.data.groupId);
+    }
+
+    // 4. Order Participations
+    match /participations/{participationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
+    }
+
+    // 5. Degustation Reviews
+    match /reviews/{reviewId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // 6. Access Invites Requests
+    match /group_requests/{requestId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSuperAdmin();
+    }
+  }
+}
