@@ -734,6 +734,7 @@ function render() {
             <div class="auth-tab ${appState.activeAuthTab === 'register' ? 'active' : ''}" data-tab="register">Criar Conta</div>
           </div>
 
+          <form id="authForm">
             ${appState.activeAuthTab === 'register' ? `
               <div class="form-group">
                 <label for="nameInput">Seu Nome</label>
