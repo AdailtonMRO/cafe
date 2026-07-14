@@ -15,6 +15,10 @@ const appState = {
   activeAuthTab: 'login', // 'login' or 'register'
   activeGroupTab: 'join', // 'join' or 'create'
   
+  // Supplier states and promotions
+  products: [],
+  activePromoIndex: 0,
+
   // Super Admin panel states
   currentView: 'dashboard', // 'dashboard' or 'super_admin'
   superAdminTab: 'groups', // 'groups' or 'users' or 'requests'
@@ -68,7 +72,7 @@ function showToast(message, type = 'success') {
   }, 4000);
 }
 
-function showModal({ title, bodyHtml, confirmText = 'Confirmar', cancelText = 'Cancelar', onConfirm }) {
+function showModal({ title, bodyHtml, confirmText = 'Confirmar', cancelText = 'Cancelar', onShow, onConfirm }) {
   const container = document.getElementById('modal-container');
   if (!container) return;
 
@@ -93,6 +97,11 @@ function showModal({ title, bodyHtml, confirmText = 'Confirmar', cancelText = 'C
   `;
 
   container.appendChild(backdrop);
+
+  // Trigger optional onShow hook for custom bindings
+  if (onShow) {
+    onShow(backdrop);
+  }
 
   const closeModal = () => {
     backdrop.style.pointerEvents = 'none';
@@ -289,6 +298,16 @@ async function initializeFirebase() {
   const db = window.firebase.firestore();
 
 
+  // Load active promotions on startup for both guest and authenticated views
+  try {
+    const productsSnap = await db.collection('products')
+      .where('deadline', '>=', new Date().toISOString().slice(0, 10))
+      .get();
+    appState.products = productsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    console.error("Erro ao carregar produtos parceiros no inicio:", err);
+  }
+
   auth.onAuthStateChanged(async (user) => {
     appState.loading = true;
     render();
@@ -418,17 +437,34 @@ async function loadFirebaseData(uid) {
     // Fetch users of the group if user is group admin or super admin
     const loadUsers = isAdmin || isPlatformAdmin();
     const usersPromise = loadUsers
+    // Parallelize Firestore queries for participations, users list, products and limited reviews
+    const isAdmin = appState.profile?.role === 'admin';
+    const participationsPromise = isAdmin
+      ? db.collection('participations').where('groupId', '==', gId).get()
+      : db.collection('participations').where('groupId', '==', gId).where('userId', '==', uid).get();
+
+    const reviewsPromise = db.collection('reviews').orderBy('createdAt', 'desc').limit(10).get();
+
+    // Fetch users of the group if user is group admin or super admin
+    const loadUsers = isAdmin || isPlatformAdmin();
+    const usersPromise = loadUsers
       ? db.collection('users').where('groupId', '==', gId).get()
       : Promise.resolve(null);
 
-    const [partsSnap, reviewsSnap, usersSnap] = await Promise.all([
+    const productsPromise = db.collection('products')
+      .where('deadline', '>=', new Date().toISOString().slice(0, 10))
+      .get();
+
+    const [partsSnap, reviewsSnap, usersSnap, productsSnap] = await Promise.all([
       participationsPromise,
       reviewsPromise,
-      usersPromise
+      usersPromise,
+      productsPromise
     ]);
 
     appState.participations = partsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     appState.reviews = reviewsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    appState.products = productsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     
     if (usersSnap) {
       appState.usersList = usersSnap.docs.map((doc) => ({ uid: doc.id, ...doc.data() }));
@@ -580,6 +616,52 @@ function renderPlatformAdminToggle() {
   `;
 }
 
+function renderPromotionsCarousel() {
+  if (!appState.products || appState.products.length === 0) return '';
+
+  const index = appState.activePromoIndex;
+  const product = appState.products[index] || appState.products[0];
+  if (!product) return '';
+
+  return `
+    <div class="promo-carousel-container" style="background:rgba(212,144,62,0.06); border:1px solid var(--accent); border-radius:12px; padding:1.25rem; margin-bottom:1.5rem; display:flex; flex-direction:column; gap:0.75rem; position:relative; overflow:hidden;">
+      <div style="position:absolute; top:0; right:0; background:var(--accent); color:var(--bg); font-size:0.65rem; font-weight:700; text-transform:uppercase; padding:0.25rem 0.6rem; border-bottom-left-radius:8px; letter-spacing:0.04em;">
+        🔥 Promoção de Fornecedor
+      </div>
+      <div style="margin-top:0.4rem;">
+        <h3 style="font-family:'Playfair Display', serif; font-size:1.2rem; color:var(--text); margin-bottom:0.25rem;">${product.name}</h3>
+        <p style="font-size:0.82rem; color:var(--muted); line-height:1.4; margin-bottom:0.75rem;">${product.description || 'Café premium diretamente do produtor parceiro.'}</p>
+        
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+          <span class="status-pill pago" style="font-weight:700; font-size:0.75rem;">R$ ${Number(product.pricePerKg).toFixed(2)} / kg</span>
+          <span class="status-pill pendente" style="background:rgba(255,255,255,0.06); font-size:0.75rem; color:var(--muted);">Estoque: ${product.availableQty} kg</span>
+          <span class="status-pill pendente" style="background:rgba(239,68,68,0.1); font-size:0.75rem; color:var(--error);">Válido até: ${product.deadline}</span>
+        </div>
+      </div>
+      ${appState.products.length > 1 ? `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.5rem;">
+          <button class="secondary promo-prev-btn" style="padding:0.25rem 0.5rem; font-size:0.7rem; border-radius:4px; border:none; cursor:pointer;">&larr; Anterior</button>
+          <span style="font-size:0.7rem; color:var(--muted); font-weight:600;">${index + 1} de ${appState.products.length}</span>
+          <button class="secondary promo-next-btn" style="padding:0.25rem 0.5rem; font-size:0.7rem; border-radius:4px; border:none; cursor:pointer;">Próxima &rarr;</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function bindPromoCarouselEvents() {
+  document.querySelector('.promo-prev-btn')?.addEventListener('click', () => {
+    if (appState.products.length <= 1) return;
+    appState.activePromoIndex = (appState.activePromoIndex - 1 + appState.products.length) % appState.products.length;
+    render();
+  });
+  document.querySelector('.promo-next-btn')?.addEventListener('click', () => {
+    if (appState.products.length <= 1) return;
+    appState.activePromoIndex = (appState.activePromoIndex + 1) % appState.products.length;
+    render();
+  });
+}
+
 function render() {
   const app = document.getElementById('app');
   if (!app) return;
@@ -639,6 +721,7 @@ function render() {
 
       <div class="dashboard-grid">
         <div style="display:flex; flex-direction:column; gap:1.5rem">
+          ${renderPromotionsCarousel()}
           <section class="card">
             <div class="section-title">
               <h2>Novidades do café</h2>
@@ -809,12 +892,19 @@ function render() {
       }
     });
 
+    bindPromoCarouselEvents();
     return;
   }
 
   // 2. Super Admin view (Platform Control)
   if (isPlatformAdmin() && appState.currentView === 'super_admin') {
     renderSuperAdminPanel();
+    return;
+  }
+
+  // 2.5. Supplier View (Fornecedor Panel)
+  if (appState.profile?.role === 'supplier') {
+    renderSupplierPanel();
     return;
   }
 
@@ -1135,6 +1225,7 @@ function render() {
         </div>
       ` : `
         <div style="display:flex; flex-direction:column; gap:1.5rem;">
+          ${renderPromotionsCarousel()}
           ${renderUserOrdersSection()}
           ${isAdmin ? renderAdminOrdersSection() : ''}
           ${renderUserParticipationsSection()}
@@ -1332,6 +1423,303 @@ function render() {
 
   renderReviews();
   bindReviewFormSubmit();
+  bindPromoCarouselEvents();
+}
+
+// =============================================================================
+// SECTION 6.5 — SUPPLIER (FORNECEDOR) PANEL & EVENTS
+// =============================================================================
+
+function renderSupplierPanel() {
+  const app = document.getElementById('app');
+  const myUid = appState.user?.uid;
+  
+  // Filter products belonging to this supplier
+  const myProducts = appState.products.filter(p => p.supplierId === myUid);
+  const totalQty = myProducts.reduce((sum, p) => sum + Number(p.availableQty || 0), 0);
+
+  app.innerHTML = `
+    <header class="header">
+      <div>
+        <p class="eyebrow">Painel do Fornecedor Parceiro</p>
+        <h1>Olá, ${appState.profile?.name || appState.user.displayName || appState.user.email}</h1>
+        <div style="margin-top:0.4rem; display:flex; align-items:center; gap:0.5rem;">
+          <span class="pill" style="background:var(--accent); color:var(--bg); font-weight:700;">FORNECEDOR PARCEIRO</span>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:1.25rem;">
+        ${renderConnectionBadge()}
+        <button id="logoutButton" class="secondary">Sair</button>
+      </div>
+    </header>
+
+    <div class="dashboard-grid" style="grid-template-columns: 1fr;">
+      <div style="display:flex; flex-direction:column; gap:1.5rem;">
+        
+        <!-- Metrics Header -->
+        <div style="display:flex; gap:1.5rem; flex-wrap:wrap;">
+          <div class="metric-card" style="padding:1.25rem; flex:1; min-width:200px;">
+            <span style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Produtos Anunciados</span>
+            <strong style="display:block; font-size:1.8rem; color:var(--accent-strong); margin-top:0.25rem;">${myProducts.length} itens</strong>
+          </div>
+          <div class="metric-card" style="padding:1.25rem; flex:1; min-width:200px;">
+            <span style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Total em Estoque</span>
+            <strong style="display:block; font-size:1.8rem; color:var(--accent-strong); margin-top:0.25rem;">${totalQty.toFixed(1)} kg</strong>
+          </div>
+        </div>
+
+        <!-- Product Management Card -->
+        <section class="card">
+          <div class="section-title">
+            <h2>Meus Produtos & Ofertas</h2>
+            <button id="supplierAddProductBtn" class="primary">+ Anunciar Café</button>
+          </div>
+          
+          <div class="admin-table-container">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Café / Produtor</th>
+                  <th>Quantidade Disponível</th>
+                  <th>Valor por kg</th>
+                  <th>Validade do Preço</th>
+                  <th style="text-align:right;">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${myProducts.map((p) => {
+                  const isExpired = new Date(p.deadline) < new Date(new Date().toISOString().slice(0, 10));
+                  return `
+                    <tr style="${isExpired ? 'opacity:0.6;' : ''}">
+                      <td>
+                        <strong>${p.name}</strong>
+                        <p style="font-size:0.75rem; color:var(--muted); max-width:320px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; margin-top:0.15rem;">
+                          ${p.description || 'Sem descrição.'}
+                        </p>
+                      </td>
+                      <td><strong>${p.availableQty} kg</strong></td>
+                      <td><span style="color:var(--success); font-weight:700;">R$ ${Number(p.pricePerKg).toFixed(2)}</span></td>
+                      <td>
+                        <span class="status-pill ${isExpired ? 'cancelado' : 'aberto'}" style="font-size:0.75rem;">
+                          ${p.deadline} ${isExpired ? '(Expirado)' : ''}
+                        </span>
+                      </td>
+                      <td style="text-align:right; display:flex; gap:0.4rem; justify-content:flex-end;">
+                        <button class="edit-product-btn secondary" style="font-size:0.75rem; padding:0.4rem 0.8rem;" data-product-id="${p.id}">Editar / Ampliar Prazo</button>
+                        <button class="delete-product-btn danger" style="font-size:0.75rem; padding:0.4rem 0.8rem;" data-product-id="${p.id}">Excluir</button>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+                ${myProducts.length === 0 ? '<tr><td colspan="5" class="hint" style="text-align:center; padding:2rem 0;">Você ainda não anunciou nenhum produto. Clique em "+ Anunciar Café" para começar!</td></tr>' : ''}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  `;
+
+  bindSupplierEvents();
+}
+
+function bindSupplierEvents() {
+  // Common Logout button binding
+  document.getElementById('logoutButton')?.addEventListener('click', async () => {
+    appState.loading = true;
+    render();
+    if (appState.firebaseMode) {
+      await window.firebase.auth().signOut();
+    }
+    appState.user = null;
+    appState.profile = null;
+    appState.group = null;
+    appState.orders = [];
+    appState.participations = [];
+    appState.reviews = [];
+    appState.currentView = 'dashboard';
+    appState.loading = false;
+    render();
+  });
+
+  // Add Product button
+  document.getElementById('supplierAddProductBtn')?.addEventListener('click', () => {
+    showModal({
+      title: 'Anunciar Novo Café',
+      bodyHtml: `
+        <form id="modalAddProductForm" style="margin-top:0;">
+          <div class="form-group">
+            <label for="prodName">Nome do Café / Produtor / Região</label>
+            <input type="text" id="prodName" placeholder="Ex: Catuaí Vermelho - Sítio Vista Alegre (Mogiana)" required />
+          </div>
+          <div class="form-group">
+            <label for="prodDesc">Descrição do Café (Variedade, torra, notas sensoriais...)</label>
+            <textarea id="prodDesc" rows="3" placeholder="Ex: Café arábica, torra média, notas de caramelo e chocolate, corpo aveludado e acidez equilibrada." required></textarea>
+          </div>
+          <div class="form-group">
+            <label for="prodQty">Quantidade Disponível (kg)</label>
+            <input type="number" id="prodQty" min="1" step="0.5" placeholder="Ex: 100" required />
+          </div>
+          <div class="form-group">
+            <label for="prodPrice">Valor por Quilo (R$)</label>
+            <input type="number" id="prodPrice" min="0.01" step="0.01" placeholder="Ex: 75.00" required />
+          </div>
+          <div class="form-group">
+            <label for="prodDeadline">Prazo Limite deste Preço</label>
+            <input type="date" id="prodDeadline" required />
+          </div>
+        </form>
+      `,
+      confirmText: 'Anunciar Produto',
+      onConfirm: async (modalEl) => {
+        const name = modalEl.querySelector('#prodName').value.trim();
+        const description = modalEl.querySelector('#prodDesc').value.trim();
+        const availableQty = Number(modalEl.querySelector('#prodQty').value);
+        const pricePerKg = Number(modalEl.querySelector('#prodPrice').value);
+        const deadline = modalEl.querySelector('#prodDeadline').value;
+
+        if (!name || !description || isNaN(availableQty) || availableQty <= 0 || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
+          showToast('Preencha todos os campos com dados válidos.', 'warning');
+          return false;
+        }
+
+        const newProduct = {
+          name,
+          description,
+          availableQty,
+          pricePerKg,
+          deadline,
+          supplierId: appState.user.uid,
+          createdAt: new Date().toISOString()
+        };
+
+        try {
+          if (appState.firebaseMode) {
+            const db = window.firebase.firestore();
+            const ref = await db.collection('products').add(newProduct);
+            appState.products.unshift({ id: ref.id, ...newProduct });
+          } else {
+            appState.products.unshift({ id: crypto.randomUUID(), ...newProduct });
+            saveLocalData();
+          }
+          showToast('Produto anunciado com sucesso!');
+          render();
+          return true;
+        } catch (error) {
+          showToast(`Erro ao anunciar: ${error.message}`, 'error');
+          return false;
+        }
+      }
+    });
+  });
+
+  // Edit / Extend Product button
+  document.querySelectorAll('.edit-product-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pId = btn.getAttribute('data-product-id');
+      const product = appState.products.find(p => p.id === pId);
+      if (!product) return;
+
+      showModal({
+        title: 'Editar Produto & Ampliar Prazo',
+        bodyHtml: `
+          <form id="modalEditProductForm" style="margin-top:0;">
+            <div class="form-group">
+              <label for="editProdName">Nome do Café / Produtor / Região</label>
+              <input type="text" id="editProdName" value="${product.name}" required />
+            </div>
+            <div class="form-group">
+              <label for="editProdDesc">Descrição do Café (Variedade, torra, notas sensoriais...)</label>
+              <textarea id="editProdDesc" rows="3" required>${product.description || ''}</textarea>
+            </div>
+            <div class="form-group">
+              <label for="editProdQty">Quantidade Disponível (kg)</label>
+              <input type="number" id="editProdQty" value="${product.availableQty}" min="0.5" step="0.5" required />
+            </div>
+            <div class="form-group">
+              <label for="editProdPrice">Valor por Quilo (R$)</label>
+              <input type="number" id="editProdPrice" value="${product.pricePerKg}" min="0.01" step="0.01" required />
+            </div>
+            <div class="form-group">
+              <label for="editProdDeadline">Prazo Limite deste Preço (Amplie este prazo)</label>
+              <input type="date" id="editProdDeadline" value="${product.deadline}" required />
+            </div>
+          </form>
+        `,
+        confirmText: 'Salvar Alterações',
+        onConfirm: async (modalEl) => {
+          const name = modalEl.querySelector('#editProdName').value.trim();
+          const description = modalEl.querySelector('#editProdDesc').value.trim();
+          const availableQty = Number(modalEl.querySelector('#editProdQty').value);
+          const pricePerKg = Number(modalEl.querySelector('#editProdPrice').value);
+          const deadline = modalEl.querySelector('#editProdDeadline').value;
+
+          if (!name || !description || isNaN(availableQty) || availableQty < 0 || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
+            showToast('Preencha os campos com valores válidos.', 'warning');
+            return false;
+          }
+
+          try {
+            if (appState.firebaseMode) {
+              const db = window.firebase.firestore();
+              await db.collection('products').doc(pId).update({
+                name,
+                description,
+                availableQty,
+                pricePerKg,
+                deadline
+              });
+              appState.products = appState.products.map(p => p.id === pId ? { ...p, name, description, availableQty, pricePerKg, deadline } : p);
+            } else {
+              appState.products = appState.products.map(p => p.id === pId ? { ...p, name, description, availableQty, pricePerKg, deadline } : p);
+              saveLocalData();
+            }
+            showToast('Produto atualizado com sucesso!');
+            render();
+            return true;
+          } catch (error) {
+            showToast(`Erro ao atualizar: ${error.message}`, 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
+
+  // Delete Product button
+  document.querySelectorAll('.delete-product-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pId = btn.getAttribute('data-product-id');
+      const product = appState.products.find(p => p.id === pId);
+      if (!product) return;
+
+      showModal({
+        title: 'Excluir Anúncio',
+        bodyHtml: `<p>Deseja realmente remover o produto <strong>${product.name}</strong> do catálogo? Essa ação é permanente.</p>`,
+        confirmText: 'Sim, Excluir',
+        cancelText: 'Cancelar',
+        onConfirm: async () => {
+          try {
+            if (appState.firebaseMode) {
+              const db = window.firebase.firestore();
+              await db.collection('products').doc(pId).delete();
+              appState.products = appState.products.filter(p => p.id !== pId);
+            } else {
+              appState.products = appState.products.filter(p => p.id !== pId);
+              saveLocalData();
+            }
+            showToast('Produto removido do catálogo.');
+            render();
+            return true;
+          } catch (error) {
+            showToast(`Erro ao remover: ${error.message}`, 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
 }
 
 // PLATFORM SUPER ADMIN RENDERERS
@@ -2012,6 +2400,7 @@ function bindSuperAdminEvents() {
             <select id="superUserRole" required>
               <option value="user">Membro (User)</option>
               <option value="admin">Líder do Grupo (Admin)</option>
+              <option value="supplier">Fornecedor (Supplier)</option>
             </select>
           </div>
           <div class="form-group" style="flex-direction:row; align-items:center; gap:0.5rem; margin-top:0.5rem;">
@@ -2592,6 +2981,15 @@ function bindAdminEvents() {
       bodyHtml: `
         <form id="modalCreateForm" style="margin-top:0;">
           <div class="form-group">
+            <label for="orderSourceProduct">Importar oferta de fornecedor parceiro (opcional)</label>
+            <select id="orderSourceProduct" style="padding:0.5rem; font-size:0.85rem; border-radius:6px;">
+              <option value="">-- Cadastrar Manualmente --</option>
+              ${appState.products.map(p => `
+                <option value="${p.id}" data-price="${p.pricePerKg}" data-deadline="${p.deadline}">${p.name} (R$ ${Number(p.pricePerKg).toFixed(2)}/kg)</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="form-group">
             <label for="orderType">Nome do Café / Produtor / Região</label>
             <input type="text" id="orderType" placeholder="Ex: Catuaí Vermelho - Sítio São João" required />
           </div>
@@ -2606,6 +3004,26 @@ function bindAdminEvents() {
         </form>
       `,
       confirmText: 'Lançar Pedido',
+      onShow: (modalEl) => {
+        // Change listener to auto populate fields when a partner product is selected
+        modalEl.querySelector('#orderSourceProduct')?.addEventListener('change', (e) => {
+          const select = e.target;
+          const selectedOption = select.options[select.selectedIndex];
+          const typeInput = modalEl.querySelector('#orderType');
+          const priceInput = modalEl.querySelector('#orderPrice');
+          const deadlineInput = modalEl.querySelector('#orderDeadline');
+
+          if (select.value) {
+            typeInput.value = selectedOption.text.split(' (R$')[0];
+            priceInput.value = selectedOption.getAttribute('data-price');
+            deadlineInput.value = selectedOption.getAttribute('data-deadline');
+          } else {
+            typeInput.value = '';
+            priceInput.value = '';
+            deadlineInput.value = '';
+          }
+        });
+      },
       onConfirm: async (modalEl) => {
         const type = modalEl.querySelector('#orderType').value.trim();
         const pricePerKg = Number(modalEl.querySelector('#orderPrice').value);

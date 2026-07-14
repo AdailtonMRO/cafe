@@ -77,5 +77,12 @@ service cloud.firestore {
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isSuperAdmin();
     }
+
+    // 7. Supplier Products
+    match /products/{productId} {
+      allow read: if true; // Allow anyone (including guests) to see promotions
+      allow create: if isAuthenticated() && (isSuperAdmin() || getUserData().role == 'supplier');
+      allow update, delete: if isAuthenticated() && (isSuperAdmin() || (getUserData().role == 'supplier' && resource.data.supplierId == request.auth.uid));
+    }
   }
 }
