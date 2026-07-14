@@ -532,6 +532,9 @@ function renderConnectionBadge() {
 }
 
 function renderGroupInfo() {
+  const role = appState.profile?.role || 'user';
+  const isAdmin = role === 'admin';
+
   if (isPlatformAdmin()) {
     return `
       <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
@@ -559,6 +562,11 @@ function renderGroupInfo() {
       <span class="pill" style="cursor: pointer;" id="copyGroupCodeBtn" title="Clique para copiar o código de convite">
         Convite: <strong style="color:var(--accent-strong)">${appState.group.code}</strong> 📋
       </span>
+      ${isAdmin ? `
+        <button id="groupSettingsBtn" class="secondary" style="font-size:0.7rem; padding:0.25rem 0.65rem; border-radius:6px; border:1px dashed var(--accent); margin-left:0.25rem; font-weight:600;">
+          ⚙ Configurar Pix
+        </button>
+      ` : ''}
     </div>
   `;
 }
@@ -1127,8 +1135,10 @@ function render() {
         </div>
       ` : `
         <div style="display:flex; flex-direction:column; gap:1.5rem;">
-          ${isAdmin ? renderAdminOrdersSection() : renderUserOrdersSection()}
-          ${isAdmin ? renderAdminParticipationsSection() : renderUserParticipationsSection()}
+          ${renderUserOrdersSection()}
+          ${isAdmin ? renderAdminOrdersSection() : ''}
+          ${renderUserParticipationsSection()}
+          ${isAdmin ? renderAdminParticipationsSection() : ''}
 
           <section class="card">
             <div class="section-title">
@@ -1315,6 +1325,7 @@ function render() {
 
   if (isAdmin) {
     bindAdminEvents();
+    bindUserEvents(); // Admin can also participate!
   } else {
     bindUserEvents();
   }
@@ -1436,6 +1447,7 @@ function renderSuperAdminTabContent() {
     return `
       <div class="section-title">
         <h2>Usuários Registrados</h2>
+        <button id="superCreateUserBtn" class="primary">+ Adicionar Usuário</button>
       </div>
       <div class="admin-table-container">
         <table class="admin-table">
@@ -1970,6 +1982,90 @@ function bindSuperAdminEvents() {
       }
     });
   });
+
+  // Add User Manually (Pre-registration)
+  document.getElementById('superCreateUserBtn')?.addEventListener('click', () => {
+    showModal({
+      title: 'Pré-cadastrar Novo Usuário',
+      bodyHtml: `
+        <form id="modalSuperCreateUser" style="margin-top:0;">
+          <p style="color:var(--muted); font-size:0.85rem; margin-bottom:1rem; line-height:1.4;">
+            Cadastre os dados de acesso do usuário. Quando ele se registrar no sistema com este e-mail, ele herdará automaticamente as permissões e o grupo vinculados.
+          </p>
+          <div class="form-group">
+            <label for="superUserName">Nome</label>
+            <input type="text" id="superUserName" placeholder="Ex: Lucas Oliveira" required />
+          </div>
+          <div class="form-group">
+            <label for="superUserEmail">E-mail</label>
+            <input type="email" id="superUserEmail" placeholder="Ex: lucas@provedor.com" required />
+          </div>
+          <div class="form-group">
+            <label for="superUserGroup">Grupo Vinculado</label>
+            <select id="superUserGroup">
+              <option value="">Nenhum</option>
+              ${appState.superGroups.map(g => `<option value="${g.id}">${g.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="superUserRole">Papel no Grupo</label>
+            <select id="superUserRole" required>
+              <option value="user">Membro (User)</option>
+              <option value="admin">Líder do Grupo (Admin)</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex-direction:row; align-items:center; gap:0.5rem; margin-top:0.5rem;">
+            <input type="checkbox" id="superUserCanCreate" style="width:auto; margin:0;" />
+            <label for="superUserCanCreate" style="margin:0; cursor:pointer;">Permitir criar novos grupos?</label>
+          </div>
+        </form>
+      `,
+      confirmText: 'Pré-cadastrar Usuário',
+      onConfirm: async (modalEl) => {
+        const name = modalEl.querySelector('#superUserName').value.trim();
+        const email = modalEl.querySelector('#superUserEmail').value.trim().toLowerCase();
+        const groupId = modalEl.querySelector('#superUserGroup').value;
+        const role = modalEl.querySelector('#superUserRole').value;
+        const canCreateGroup = modalEl.querySelector('#superUserCanCreate').checked;
+
+        if (!name || !email) {
+          showToast('Preencha os campos obrigatórios.', 'warning');
+          return false;
+        }
+
+        const preRegProfile = {
+          name,
+          email,
+          groupId: groupId || null,
+          role,
+          canCreateGroup: role === 'admin' ? true : canCreateGroup,
+          requestStatus: 'approved',
+          createdAt: new Date().toISOString()
+        };
+
+        try {
+          if (appState.firebaseMode) {
+            // Generate a temporary document ID, which will be merged/deleted when the user signs up
+            const tempId = `prereg_${email.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            await db.collection('users').doc(tempId).set(preRegProfile);
+          } else {
+            const tempId = `prereg_${crypto.randomUUID()}`;
+            appState.superUsers.push({ uid: tempId, ...preRegProfile });
+            saveLocalData();
+          }
+          showToast('Usuário pré-cadastrado com sucesso!');
+          if (appState.firebaseMode) {
+            await loadSuperAdminData();
+          }
+          render();
+          return true;
+        } catch (error) {
+          showToast(`Erro ao salvar: ${error.message}`, 'error');
+          return false;
+        }
+      }
+    });
+  });
 }
 
 // =============================================================================
@@ -2183,14 +2279,21 @@ function renderAdminParticipationsSection() {
                   <td>${Number(p.quantityKg).toFixed(2)} kg</td>
                   <td>R$ ${Number(p.valueTotal).toFixed(2)}</td>
                   <td>
-                    <button
-                      class="toggle-payment-btn status-pill ${p.paymentStatus}"
-                      data-participation-id="${p.id}"
-                      data-current="${p.paymentStatus}"
-                      style="cursor:pointer; border:none; font-size:0.7rem; font-weight:700; padding:0.25rem 0.6rem; border-radius:4px;"
-                    >
-                      ${p.paymentStatus === 'pago' ? '✔ Pago' : '⏳ Pendente'}
-                    </button>
+                    <div style="display:flex; flex-direction:column; gap:0.25rem; align-items:flex-start;">
+                      <button
+                        class="toggle-payment-btn status-pill ${p.paymentStatus}"
+                        data-participation-id="${p.id}"
+                        data-current="${p.paymentStatus}"
+                        style="cursor:pointer; border:none; font-size:0.7rem; font-weight:700; padding:0.25rem 0.6rem; border-radius:4px;"
+                      >
+                        ${p.paymentStatus === 'pago' ? '✔ Pago' : (p.paymentStatus === 'confirmando' ? '🔍 Validar Pix' : '⏳ Pendente')}
+                      </button>
+                      ${p.paymentStatus === 'confirmando' ? `
+                        <span style="font-size:0.7rem; color:var(--warning); font-weight:600; background:rgba(251,191,36,0.1); padding:0.1rem 0.3rem; border-radius:4px;">
+                          Ref: ${p.pixTransactionId || ''}
+                        </span>
+                      ` : ''}
+                    </div>
                   </td>
                   <td>
                     <button
@@ -2249,18 +2352,23 @@ function renderUserParticipationsSection() {
   const pendingCount = mine.filter((p) => p.paymentStatus === 'pendente').length;
 
   return `
-    <section class="card">
-      <div class="section-title">
-        <h2>Meu Histórico de Compras</h2>
-        <span style="font-size:0.8rem; color:var(--muted);">${mine.length} pedido(s)</span>
-      </div>
-
-      ${pendingCount > 0 ? `
+      ${pendingCount > 0 && appState.group?.pixKey ? `
+        <div class="hint-box" style="margin-bottom:1rem; border: 1px solid var(--accent); background:rgba(212, 144, 62, 0.04);">
+          <strong style="color:var(--accent-strong);">💸 Dados para Pagamento Pix:</strong>
+          <p style="font-size:0.8rem; margin-top:0.25rem;">
+            Chave Pix: <code id="groupPixKeyText" style="font-weight:700; color:var(--text); cursor:pointer;" title="Clique para copiar">${appState.group.pixKey}</code> 📋
+          </p>
+          <p style="font-size:0.8rem;">Favorecido: <strong>${appState.group.pixReceiver || 'Líder do Grupo'}</strong></p>
+          <span style="font-size:0.75rem; color:var(--muted); margin-top:0.4rem; display:block;">
+            * Pague o valor total correspondente ao seu pedido e envie o código/comprovante de transação abaixo.
+          </span>
+        </div>
+      ` : (pendingCount > 0 ? `
         <div class="hint-box warning" style="margin-bottom:1rem;">
           <strong>⚠️ ${pendingCount} pagamento(s) pendente(s)</strong>
-          <p style="font-size:0.8rem;">Entre em contato com o administrador do grupo para regularizar.</p>
+          <p style="font-size:0.8rem;">O administrador ainda não cadastrou a Chave Pix do grupo. Fale com ele para efetuar o pagamento.</p>
         </div>
-      ` : ''}
+      ` : '')}
 
       <div class="participation-summary-pills" style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1.25rem;">
         <div class="metric-card" style="padding:0.75rem 1.25rem; flex:1; min-width:130px;">
@@ -2277,15 +2385,43 @@ function renderUserParticipationsSection() {
         ${mine.map((p) => {
           const order = appState.orders.find((o) => o.id === p.orderId);
           const orderName = order ? order.type : `Pedido encerrado`;
+          
+          let statusText = '⏳ Pag. Pendente';
+          if (p.paymentStatus === 'pago') statusText = '✔ Pago';
+          if (p.paymentStatus === 'confirmando') statusText = '🔍 Confirmando Pix';
+
           return `
-            <article class="order-item" style="border-left:3px solid var(--${p.paymentStatus === 'pago' ? 'success' : 'warning'});">
+            <article class="order-item" style="border-left:3px solid var(--${p.paymentStatus === 'pago' ? 'success' : (p.paymentStatus === 'confirmando' ? 'warning' : 'error')});">
               <div class="order-details" style="flex:1;">
                 <strong>${orderName}</strong>
                 <p>${Number(p.quantityKg).toFixed(2)} kg — R$ ${Number(p.valueTotal).toFixed(2)}</p>
                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
-                  <span class="status-pill ${p.paymentStatus}">${p.paymentStatus === 'pago' ? '✔ Pago' : '⏳ Pag. Pendente'}</span>
+                  <span class="status-pill ${p.paymentStatus}">${statusText}</span>
                   <span class="status-pill ${p.pickupStatus}">${p.pickupStatus === 'recebido' ? '✔ Recebido' : '📬 Aguardando Retirada'}</span>
                 </div>
+                
+                ${p.paymentStatus === 'pendente' && appState.group?.pixKey ? `
+                  <div style="margin-top:0.8rem; border-top:1px dashed var(--border); padding-top:0.6rem; display:flex; gap:0.5rem; align-items:end;">
+                    <div class="form-group" style="margin:0; flex:1;">
+                      <label style="font-size:0.7rem;">Cód. da Transação / Pix (4 últimos dígitos)</label>
+                      <input
+                        type="text"
+                        class="pix-ref-input"
+                        placeholder="Ex: 8a4b"
+                        style="padding:0.4rem; font-size:0.8rem; border-radius:6px;"
+                        required
+                        data-part-id="${p.id}"
+                      />
+                    </div>
+                    <button class="primary confirm-pix-btn" data-part-id="${p.id}" style="padding:0.45rem 0.8rem; font-size:0.75rem; border-radius:6px; height:fit-content;">Confirmar</button>
+                  </div>
+                ` : ''}
+
+                ${p.paymentStatus === 'confirmando' ? `
+                  <p style="font-size:0.75rem; color:var(--muted); margin-top:0.4rem;">
+                    Ref. enviada: <code style="background:rgba(0,0,0,0.2); padding:0.1rem 0.3rem; border-radius:4px;">${p.pixTransactionId || ''}</code>
+                  </p>
+                ` : ''}
               </div>
             </article>
           `;
@@ -2345,10 +2481,111 @@ function bindUserEvents() {
       }
     });
   });
+
+  // Copy Pix key click handler
+  document.getElementById('groupPixKeyText')?.addEventListener('click', () => {
+    const key = document.getElementById('groupPixKeyText').textContent.trim();
+    navigator.clipboard.writeText(key);
+    showToast('Chave Pix copiada para a área de transferência!');
+  });
+
+  // Pix transaction reference confirmation handler
+  document.querySelectorAll('.confirm-pix-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pId = btn.getAttribute('data-part-id');
+      const inputEl = document.querySelector(`.pix-ref-input[data-part-id="${pId}"]`);
+      const refCode = inputEl?.value.trim();
+
+      if (!refCode) {
+        showToast('Informe o código ou últimos dígitos da transação.', 'warning');
+        return;
+      }
+
+      try {
+        if (appState.firebaseMode) {
+          const db = window.firebase.firestore();
+          await db.collection('participations').doc(pId).update({
+            paymentStatus: 'confirmando',
+            pixTransactionId: refCode
+          });
+          await loadFirebaseData(appState.user.uid);
+        } else {
+          appState.participations = appState.participations.map((p) =>
+            p.id === pId ? { ...p, paymentStatus: 'confirmando', pixTransactionId: refCode } : p
+          );
+          saveLocalData();
+        }
+        showToast('Confirmação enviada com sucesso! Aguarde a validação do líder.');
+        render();
+      } catch (error) {
+        showToast(`Erro ao confirmar: ${error.message}`, 'error');
+      }
+    });
+  });
 }
 
 // BIND GROUP ADMIN EVENTS
 function bindAdminEvents() {
+  document.getElementById('groupSettingsBtn')?.addEventListener('click', () => {
+    if (!appState.group) return;
+
+    showModal({
+      title: 'Configuração de Recebimento Pix',
+      bodyHtml: `
+        <form id="modalGroupSettingsForm" style="margin-top:0;">
+          <p style="color:var(--muted); font-size:0.8rem; margin-bottom:1rem; line-height:1.4;">
+            Cadastre a chave Pix e o nome do favorecido do seu grupo. Os membros do grupo visualizarão essas informações no histórico de compras para realizar os pagamentos das cotas.
+          </p>
+          <div class="form-group">
+            <label for="groupPixKey">Chave Pix (E-mail, Telefone, CPF ou Aleatória)</label>
+            <input type="text" id="groupPixKey" value="${appState.group.pixKey || ''}" placeholder="Ex: pix@cafecoletivo.com" required />
+          </div>
+          <div class="form-group">
+            <label for="groupPixReceiver">Favorecido (Nome completo do titular)</label>
+            <input type="text" id="groupPixReceiver" value="${appState.group.pixReceiver || ''}" placeholder="Ex: João da Silva Santos" required />
+          </div>
+        </form>
+      `,
+      confirmText: 'Salvar Configurações',
+      onConfirm: async (modalEl) => {
+        const pixKey = modalEl.querySelector('#groupPixKey').value.trim();
+        const pixReceiver = modalEl.querySelector('#groupPixReceiver').value.trim();
+
+        if (!pixKey || !pixReceiver) {
+          showToast('Preencha todos os campos.', 'warning');
+          return false;
+        }
+
+        try {
+          if (appState.firebaseMode) {
+            await window.firebase.firestore().collection('groups').doc(appState.group.id).update({
+              pixKey,
+              pixReceiver
+            });
+            appState.group.pixKey = pixKey;
+            appState.group.pixReceiver = pixReceiver;
+          } else {
+            appState.group.pixKey = pixKey;
+            appState.group.pixReceiver = pixReceiver;
+            const localGroups = JSON.parse(localStorage.getItem('cafe-local-groups') || '[]');
+            const idx = localGroups.findIndex(g => g.id === appState.group.id);
+            if (idx !== -1) {
+              localGroups[idx] = { ...localGroups[idx], pixKey, pixReceiver };
+              localStorage.setItem('cafe-local-groups', JSON.stringify(localGroups));
+            }
+            saveLocalData();
+          }
+          showToast('Configurações do grupo atualizadas!');
+          render();
+          return true;
+        } catch (error) {
+          showToast(`Erro ao salvar: ${error.message}`, 'error');
+          return false;
+        }
+      }
+    });
+  });
+
   document.getElementById('newOrderButton')?.addEventListener('click', () => {
     showModal({
       title: 'Iniciar Compra de Café (Novo Pedido)',
@@ -2490,7 +2727,7 @@ function bindAdminEvents() {
     btn.addEventListener('click', async () => {
       const pId = btn.getAttribute('data-participation-id');
       const current = btn.getAttribute('data-current');
-      const nextStatus = current === 'pendente' ? 'pago' : 'pendente';
+      const nextStatus = current === 'pago' ? 'pendente' : 'pago';
 
       try {
         if (appState.firebaseMode) {
@@ -2608,14 +2845,34 @@ async function handleFirebaseAuth(action, name, email, password) {
     }
     const role = window.adminEmail && email.toLowerCase() === window.adminEmail.toLowerCase() ? 'admin' : 'user';
     const canCreateGroup = role === 'admin';
-    const profile = {
+    
+    // Check for pre-registered profile by email
+    let profile = {
       name: name || email.split('@')[0],
+      email: email.toLowerCase(),
       role,
       groupId: null,
       canCreateGroup,
       requestStatus: 'none',
       createdAt: new Date().toISOString()
     };
+
+    const preRegQuery = await db.collection('users').where('email', '==', email.toLowerCase()).get();
+    if (!preRegQuery.empty) {
+      const preRegDoc = preRegQuery.docs[0];
+      const preRegData = preRegDoc.data();
+      profile = {
+        ...profile,
+        ...preRegData,
+        name: name || preRegData.name || profile.name
+      };
+      
+      // If the pre-registered document was using a non-UID placeholder ID, delete it
+      if (preRegDoc.id !== userCredential.user.uid) {
+        await db.collection('users').doc(preRegDoc.id).delete();
+      }
+    }
+
     await db.collection('users').doc(userCredential.user.uid).set(profile);
     appState.user = userCredential.user;
     appState.profile = profile;
@@ -2623,15 +2880,50 @@ async function handleFirebaseAuth(action, name, email, password) {
   } else {
     const userCredential = await auth.signInWithEmailAndPassword(email, password);
     appState.user = userCredential.user;
-    const profileDoc = await db.collection('users').doc(userCredential.user.uid).get();
-    const profile = profileDoc.exists ? profileDoc.data() : {
-      name: userCredential.user.displayName || userCredential.user.email?.split('@')[0] || 'Usuário',
-      role: 'user',
-      groupId: null,
-      canCreateGroup: false,
-      requestStatus: 'none',
-      createdAt: new Date().toISOString()
-    };
+    
+    // Fetch profile, checking both UID and pre-registered emails
+    let profileDoc = await db.collection('users').doc(userCredential.user.uid).get();
+    let profile = null;
+
+    if (profileDoc.exists) {
+      profile = profileDoc.data();
+      // Ensure email field exists in the document
+      if (!profile.email && userCredential.user.email) {
+        profile.email = userCredential.user.email.toLowerCase();
+        await db.collection('users').doc(userCredential.user.uid).update({ email: profile.email });
+      }
+    } else {
+      // Fallback: check if pre-registered by email
+      const preRegQuery = await db.collection('users').where('email', '==', userCredential.user.email?.toLowerCase()).get();
+      if (!preRegQuery.empty) {
+        const preRegDoc = preRegQuery.docs[0];
+        profile = {
+          name: userCredential.user.displayName || userCredential.user.email?.split('@')[0] || 'Usuário',
+          email: userCredential.user.email?.toLowerCase(),
+          role: 'user',
+          groupId: null,
+          canCreateGroup: false,
+          requestStatus: 'none',
+          createdAt: new Date().toISOString(),
+          ...preRegDoc.data()
+        };
+        await db.collection('users').doc(userCredential.user.uid).set(profile);
+        if (preRegDoc.id !== userCredential.user.uid) {
+          await db.collection('users').doc(preRegDoc.id).delete();
+        }
+      } else {
+        profile = {
+          name: userCredential.user.displayName || userCredential.user.email?.split('@')[0] || 'Usuário',
+          email: userCredential.user.email?.toLowerCase() || '',
+          role: 'user',
+          groupId: null,
+          canCreateGroup: false,
+          requestStatus: 'none',
+          createdAt: new Date().toISOString()
+        };
+        await db.collection('users').doc(userCredential.user.uid).set(profile);
+      }
+    }
     appState.profile = profile;
     showToast(`Bem-vindo de volta, ${profile.name}!`);
   }
