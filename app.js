@@ -2628,8 +2628,9 @@ function renderAdminOrdersSection() {
             </span>
           </div>
         </div>
-        <div class="actions">
+        <div class="actions" style="display:flex; gap:0.4rem;">
           <button class="edit-order-btn secondary" data-order-id="${order.id}" style="font-size:0.8rem; padding:0.5rem 1rem;">Editar</button>
+          <button class="delete-order-btn danger" data-order-id="${order.id}" style="font-size:0.8rem; padding:0.5rem 1rem; border-radius:6px; cursor:pointer;">Excluir</button>
         </div>
       </article>
     `;
@@ -3408,6 +3409,61 @@ function bindAdminEvents() {
             return true;
           } catch (err) {
             showToast(`Erro ao atualizar: ${err.message}`, 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
+
+  // Delete collective order and its participations
+  document.querySelectorAll('.delete-order-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const orderId = btn.getAttribute('data-order-id');
+      const order = appState.orders.find((o) => o.id === orderId);
+      if (!order) return;
+
+      const orderParts = appState.participations.filter(p => p.orderId === orderId);
+
+      showModal({
+        title: 'Excluir Pedido Coletivo',
+        bodyHtml: `
+          <p style="color:var(--text); font-size:0.9rem; line-height:1.5;">
+            Deseja realmente excluir permanentemente o pedido de café <strong>${order.type}</strong>?
+          </p>
+          <p style="font-size:0.8rem; color:var(--error); font-weight:600; margin-top:0.6rem;">
+            ⚠️ ATENÇÃO: Isso também excluirá permanentemente as ${orderParts.length} participação(ões) de membros cadastradas para este pedido!
+          </p>
+        `,
+        confirmText: 'Sim, Excluir Tudo',
+        cancelText: 'Cancelar',
+        onConfirm: async () => {
+          try {
+            if (appState.firebaseMode) {
+              const db = window.firebase.firestore();
+              const batch = db.batch();
+
+              // Delete the order doc
+              batch.delete(db.collection('orders').doc(orderId));
+
+              // Delete all participations related to this order
+              orderParts.forEach((part) => {
+                batch.delete(db.collection('participations').doc(part.id));
+              });
+
+              await batch.commit();
+              await loadFirebaseData(appState.user.uid);
+            } else {
+              appState.orders = appState.orders.filter(o => o.id !== orderId);
+              appState.participations = appState.participations.filter(p => p.orderId !== orderId);
+              saveLocalData();
+            }
+
+            showToast('Pedido coletivo e participações removidas.');
+            render();
+            return true;
+          } catch (err) {
+            showToast(`Erro ao excluir pedido: ${err.message}`, 'error');
             return false;
           }
         }
