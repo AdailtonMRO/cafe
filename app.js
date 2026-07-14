@@ -226,6 +226,20 @@ async function toggleSuperAdminView() {
     }
   } else {
     appState.currentView = 'dashboard';
+    if (appState.firebaseMode) {
+      appState.loading = true;
+      render();
+      try {
+        await loadPlatformGroups();
+        if (appState.user) {
+          await loadFirebaseData(appState.user.uid);
+        }
+      } catch (err) {
+        console.error("Erro ao retornar para o painel:", err);
+      } finally {
+        appState.loading = false;
+      }
+    }
     render();
   }
 }
@@ -1742,9 +1756,17 @@ function bindSuperAdminEvents() {
               saveLocalData();
             }
 
+            // Prevent rendering orphan data if the deleted group was currently active
+            if (appState.group && appState.group.id === gId) {
+              appState.group = null;
+              if (appState.profile) appState.profile.groupId = null;
+              appState.orders = [];
+              appState.participations = [];
+            }
+
             showToast('Grupo removido!');
             if (appState.firebaseMode) {
-              await loadFirebaseData(appState.user.uid);
+              await loadSuperAdminData();
             }
             render();
             return true;
