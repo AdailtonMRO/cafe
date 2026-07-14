@@ -734,11 +734,17 @@ function render() {
             <div class="auth-tab ${appState.activeAuthTab === 'register' ? 'active' : ''}" data-tab="register">Criar Conta</div>
           </div>
 
-          <form id="authForm">
             ${appState.activeAuthTab === 'register' ? `
               <div class="form-group">
                 <label for="nameInput">Seu Nome</label>
                 <input id="nameInput" placeholder="Ex: Ana Silva" required />
+              </div>
+              <div class="form-group">
+                <label for="accountTypeInput">Tipo de Conta</label>
+                <select id="accountTypeInput" style="padding:0.5rem; font-size:0.85rem; border-radius:6px;">
+                  <option value="user">Membro Consumidor</option>
+                  <option value="supplier">Fornecedor Parceiro (Requer Aprovação)</option>
+                </select>
               </div>
             ` : ''}
             <div class="form-group">
@@ -814,17 +820,28 @@ function render() {
       const email = document.getElementById('emailInput').value.trim();
       const password = document.getElementById('passwordInput').value;
       const name = document.getElementById('nameInput')?.value.trim() || '';
+      const requestedType = document.getElementById('accountTypeInput')?.value || 'user';
 
       appState.loading = true;
       render();
 
       try {
         if (appState.firebaseMode) {
-          await handleFirebaseAuth(appState.activeAuthTab, name, email, password);
+          await handleFirebaseAuth(appState.activeAuthTab, name, email, password, requestedType);
         } else {
           appState.user = { uid: crypto.randomUUID(), email, displayName: name || email.split('@')[0] };
-          loadLocalData();
-          showToast(`Conectado localmente como ${appState.profile.name}`);
+          appState.profile = {
+            name: name || email.split('@')[0],
+            email: email.toLowerCase(),
+            role: requestedType === 'supplier' ? 'user' : 'user',
+            requestSupplierStatus: requestedType === 'supplier' ? 'pending' : 'none',
+            groupId: null,
+            canCreateGroup: false,
+            requestStatus: 'none',
+            createdAt: new Date().toISOString()
+          };
+          saveLocalData();
+          showToast(requestedType === 'supplier' ? 'Cadastro de fornecedor enviado para aprovação!' : `Conectado localmente como ${appState.profile.name}`);
         }
       } catch (error) {
         showToast(error.message || 'Erro ao autenticar', 'error');
@@ -895,6 +912,52 @@ function render() {
   // 2.5. Supplier View (Fornecedor Panel)
   if (appState.profile?.role === 'supplier') {
     renderSupplierPanel();
+    return;
+  }
+
+  // 2.7. Pending Supplier View
+  if (appState.profile?.requestSupplierStatus === 'pending') {
+    app.innerHTML = `
+      <header class="header">
+        <div>
+          <p class="eyebrow">Clube de Compras</p>
+          <h1>Coffee Experience</h1>
+        </div>
+        <div style="display:flex; align-items:center; gap:1.25rem;">
+          ${renderConnectionBadge()}
+          <button id="logoutButton" class="secondary">Sair</button>
+        </div>
+      </header>
+
+      <section class="card auth-card" style="text-align:center; padding:3rem 2rem;">
+        <div style="font-size:3rem; margin-bottom:1rem;">⏳</div>
+        <h2 style="font-family:'Playfair Display', serif; margin-bottom:0.75rem;">Cadastro de Fornecedor em Análise</h2>
+        <p style="color:var(--muted); font-size:0.9rem; line-height:1.6; max-width:480px; margin:0 auto 1.5rem;">
+          Seu pedido para se tornar um <strong>Fornecedor Parceiro</strong> está pendente de aprovação por um Administrador do Sistema. 
+          Você terá acesso total ao painel de anúncios de café assim que a análise for concluída!
+        </p>
+        <div style="color:var(--accent-strong); font-size:0.8rem; font-weight:600;">
+          E-mail de cadastro: ${appState.profile.email}
+        </div>
+      </section>
+    `;
+
+    document.getElementById('logoutButton')?.addEventListener('click', async () => {
+      appState.loading = true;
+      render();
+      if (appState.firebaseMode) {
+        await window.firebase.auth().signOut();
+      }
+      appState.user = null;
+      appState.profile = null;
+      appState.group = null;
+      appState.orders = [];
+      appState.participations = [];
+      appState.reviews = [];
+      appState.currentView = 'dashboard';
+      appState.loading = false;
+      render();
+    });
     return;
   }
 
@@ -1868,12 +1931,14 @@ function renderSuperAdminTabContent() {
   }
 
   if (appState.superAdminTab === 'requests') {
+    const pendingSuppliers = appState.superUsers.filter(u => u.requestSupplierStatus === 'pending');
+
     return `
       <div class="section-title">
-        <h2>Solicitações de Acesso a Administrador</h2>
+        <h2>Solicitações de Acesso a Liderança (Grupos)</h2>
       </div>
       <div class="admin-table-container">
-        <table class="admin-table">
+        <table class="admin-table" style="margin-bottom: 2rem;">
           <thead>
             <tr>
               <th>Solicitante</th>
@@ -1899,6 +1964,36 @@ function renderSuperAdminTabContent() {
               </tr>
             `).join('')}
             ${appState.superRequests.length === 0 ? '<tr><td colspan="5" class="hint" style="text-align:center;">Nenhuma solicitação encontrada.</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-title" style="margin-top:2rem;">
+        <h2>Solicitações de Cadastro de Fornecedor</h2>
+      </div>
+      <div class="admin-table-container">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Nome / Empresa</th>
+              <th>E-mail</th>
+              <th>Status</th>
+              <th style="text-align:right;">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pendingSuppliers.map((u) => `
+              <tr>
+                <td><strong>${u.name}</strong></td>
+                <td>${u.email}</td>
+                <td><span class="status-pill pendente">PENDENTE</span></td>
+                <td style="text-align:right; display:flex; gap:0.4rem; justify-content:flex-end;">
+                  <button class="approve-supplier-btn primary" style="font-size:0.75rem; padding:0.4rem 0.8rem;" data-user-uid="${u.uid || u.id}">Aprovar</button>
+                  <button class="reject-supplier-btn danger" style="font-size:0.75rem; padding:0.4rem 0.8rem;" data-user-uid="${u.uid || u.id}">Rejeitar</button>
+                </td>
+              </tr>
+            `).join('')}
+            ${pendingSuppliers.length === 0 ? '<tr><td colspan="4" class="hint" style="text-align:center;">Nenhuma solicitação de fornecedor pendente.</td></tr>' : ''}
           </tbody>
         </table>
       </div>
@@ -2357,6 +2452,59 @@ function bindSuperAdminEvents() {
         render();
       } catch (error) {
         showToast(error.message, 'error');
+      }
+    });
+  });
+
+  // Approve Supplier Request
+  document.querySelectorAll('.approve-supplier-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const uId = btn.getAttribute('data-user-uid');
+      appState.loading = true;
+      render();
+      try {
+        if (appState.firebaseMode) {
+          await db.collection('users').doc(uId).update({
+            role: 'supplier',
+            requestSupplierStatus: 'approved'
+          });
+          await loadSuperAdminData();
+        } else {
+          appState.superUsers = appState.superUsers.map(u => (u.uid === uId || u.id === uId) ? { ...u, role: 'supplier', requestSupplierStatus: 'approved' } : u);
+          saveLocalData();
+        }
+        showToast('Fornecedor aprovado com sucesso!');
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        appState.loading = false;
+        render();
+      }
+    });
+  });
+
+  // Reject Supplier Request
+  document.querySelectorAll('.reject-supplier-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const uId = btn.getAttribute('data-user-uid');
+      appState.loading = true;
+      render();
+      try {
+        if (appState.firebaseMode) {
+          await db.collection('users').doc(uId).update({
+            requestSupplierStatus: 'rejected'
+          });
+          await loadSuperAdminData();
+        } else {
+          appState.superUsers = appState.superUsers.map(u => (u.uid === uId || u.id === uId) ? { ...u, requestSupplierStatus: 'rejected' } : u);
+          saveLocalData();
+        }
+        showToast('Solicitação de fornecedor rejeitada.');
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        appState.loading = false;
+        render();
       }
     });
   });
@@ -3242,7 +3390,7 @@ function bindReviewFormSubmit() {
 }
 
 // AUTH AND INTEGRATIONS HELPERS
-async function handleFirebaseAuth(action, name, email, password) {
+async function handleFirebaseAuth(action, name, email, password, requestedRole = 'user') {
   const auth = window.firebase.auth();
   const db = window.firebase.firestore();
 
@@ -3262,6 +3410,7 @@ async function handleFirebaseAuth(action, name, email, password) {
       groupId: null,
       canCreateGroup,
       requestStatus: 'none',
+      requestSupplierStatus: requestedRole === 'supplier' ? 'pending' : 'none',
       createdAt: new Date().toISOString()
     };
 
