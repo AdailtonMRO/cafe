@@ -95,12 +95,9 @@ function showModal({ title, bodyHtml, confirmText = 'Confirmar', cancelText = 'C
   container.appendChild(backdrop);
 
   const closeModal = () => {
-    backdrop.style.animation = 'fadeIn 0.2s reverse forwards';
-    const content = backdrop.querySelector('.modal-content');
-    if (content) content.style.animation = 'slideUp 0.2s reverse forwards';
-    backdrop.addEventListener('animationend', () => {
-      backdrop.remove();
-    });
+    backdrop.style.pointerEvents = 'none';
+    // Remove immediately from DOM to prevent phantom overlays blocking page clicks
+    backdrop.remove();
   };
 
   backdrop.querySelector('.modal-close').addEventListener('click', closeModal);
