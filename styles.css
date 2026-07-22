@@ -965,6 +965,20 @@ button.danger:hover {
     margin-bottom: 1rem;
     border-radius: var(--radius-md);
   }
+  .hero-visual {
+    margin: 0.25rem 0;
+  }
+  .hero-visual img {
+    max-width: 160px;
+    height: auto;
+    margin: 0 auto;
+  }
+  .news-card-image {
+    height: 80px;
+  }
+  .tech-card-image {
+    height: 85px;
+  }
   .hero-copy h1 {
     font-size: 1.4rem;
     margin-bottom: 0.65rem;
@@ -1121,6 +1135,15 @@ button.danger:hover {
   }
   .card, .hero, .auth-card {
     padding: 0.85rem;
+  }
+  .hero-visual img {
+    max-width: 130px;
+  }
+  .news-card-image {
+    height: 70px;
+  }
+  .tech-card-image {
+    height: 75px;
   }
   .header h1 {
     font-size: 1.2rem;
