@@ -1356,40 +1356,60 @@ function render() {
       </div>
       <div class="tech-grid">
         <article class="tech-card">
-          <h3>Espresso</h3>
-          <p>Extração rápida e intensa, ideal para quem gosta de um café concentrado e com corpo forte.</p>
-          <ul>
-            <li>Pressão alta (9 bar)</li>
-            <li>Tempo curto (25-30s)</li>
-            <li>Perfis encorpados e crema</li>
-          </ul>
+          <div class="tech-card-image">
+            <img src="assets/espresso.png" alt="Método Espresso" loading="lazy" />
+          </div>
+          <div class="tech-card-content">
+            <h3>Espresso</h3>
+            <p>Extração rápida e intensa, ideal para quem gosta de um café concentrado e com corpo forte.</p>
+            <ul>
+              <li>Pressão alta (9 bar)</li>
+              <li>Tempo curto (25-30s)</li>
+              <li>Perfis encorpados e crema</li>
+            </ul>
+          </div>
         </article>
         <article class="tech-card">
-          <h3>Aeropress</h3>
-          <p>Uma técnica limpa e versátil, perfeita para explorar sabores com mais clareza e equilíbrio.</p>
-          <ul>
-            <li>Filtro de papel ou metal</li>
-            <li>Imersão + pressão manual</li>
-            <li>Finalização extremamente limpa</li>
-          </ul>
+          <div class="tech-card-image">
+            <img src="assets/aeropress.png" alt="Método Aeropress" loading="lazy" />
+          </div>
+          <div class="tech-card-content">
+            <h3>Aeropress</h3>
+            <p>Uma técnica limpa e versátil, perfeita para explorar sabores com mais clareza e equilíbrio.</p>
+            <ul>
+              <li>Filtro de papel ou metal</li>
+              <li>Imersão + pressão manual</li>
+              <li>Finalização extremamente limpa</li>
+            </ul>
+          </div>
         </article>
         <article class="tech-card">
-          <h3>Hario V60</h3>
-          <p>O método de filtro em dripper destaca a complexidade aromática do café, com ótima precisão.</p>
-          <ul>
-            <li>Fluxo de água centralizado</li>
-            <li>Notas florais e frutadas acentuadas</li>
-            <li>Corpo leve e acidez brilhante</li>
-          </ul>
+          <div class="tech-card-image">
+            <img src="assets/v60.png" alt="Método Hario V60" loading="lazy" />
+          </div>
+          <div class="tech-card-content">
+            <h3>Hario V60</h3>
+            <p>O método de filtro em dripper destaca a complexidade aromática do café, com ótima precisão.</p>
+            <ul>
+              <li>Fluxo de água centralizado</li>
+              <li>Notas florais e frutadas acentuadas</li>
+              <li>Corpo leve e acidez brilhante</li>
+            </ul>
+          </div>
         </article>
         <article class="tech-card">
-          <h3>French Press</h3>
-          <p>Reúne sabor, textura e uma experiência mais encorpada, excelente para cafés mais robustos.</p>
-          <ul>
-            <li>Imersão total (4 minutos)</li>
-            <li>Filtro metálico preserva óleos essenciais</li>
-            <li>Bebida densa e aromática</li>
-          </ul>
+          <div class="tech-card-image">
+            <img src="assets/french-press.png" alt="Método French Press" loading="lazy" />
+          </div>
+          <div class="tech-card-content">
+            <h3>French Press</h3>
+            <p>Reúne sabor, textura e uma experiência mais encorpada, excelente para cafés mais robustos.</p>
+            <ul>
+              <li>Imersão total (4 minutos)</li>
+              <li>Filtro metálico preserva óleos essenciais</li>
+              <li>Bebida densa e aromática</li>
+            </ul>
+          </div>
         </article>
       </div>
     </section>
