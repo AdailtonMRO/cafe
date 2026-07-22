@@ -495,9 +495,10 @@ function loadLocalData() {
     let localUsers = JSON.parse(localStorage.getItem('cafe-local-users') || '[]');
     if (localUsers.length === 0 && appState.profile) {
       localUsers = [
-        { uid: appState.user.uid, name: appState.profile.name, email: appState.user.email, role: appState.profile.role, groupId: appState.profile.groupId, canCreateGroup: appState.profile.canCreateGroup, requestStatus: 'none' },
-        { uid: 'mock-user-1', name: 'João Silva', email: 'joao.silva@example.com', role: 'user', groupId: localGroups[0]?.id || null, canCreateGroup: false, requestStatus: 'none' },
-        { uid: 'mock-user-2', name: 'Maria Santos', email: 'maria.santos@example.com', role: 'admin', groupId: localGroups[0]?.id || null, canCreateGroup: true, requestStatus: 'none' }
+        { uid: appState.user.uid, name: appState.profile.name, email: appState.user.email, phone: '(11) 98765-4321', role: appState.profile.role, groupId: appState.profile.groupId, canCreateGroup: appState.profile.canCreateGroup, accountStatus: 'active', preferredRoast: 'Média', preferredMethod: 'V60' },
+        { uid: 'mock-user-1', name: 'João Silva', email: 'joao.silva@example.com', phone: '(11) 97654-3210', role: 'user', groupId: localGroups[0]?.id || null, canCreateGroup: false, accountStatus: 'active', preferredRoast: 'Escura', preferredMethod: 'Espresso' },
+        { uid: 'mock-user-2', name: 'Maria Santos', email: 'maria.santos@example.com', phone: '(21) 98888-7777', role: 'admin', groupId: localGroups[0]?.id || null, canCreateGroup: true, accountStatus: 'active', preferredRoast: 'Clara', preferredMethod: 'Aeropress' },
+        { uid: 'mock-supplier-1', name: 'Fazenda & Torrefação Mogiana', email: 'contato@mogianacafes.com.br', phone: '(19) 99876-5432', cityState: 'Mogiana - SP', document: '12.345.678/0001-90', role: 'supplier', requestSupplierStatus: 'approved', accountStatus: 'active' }
       ];
       localStorage.setItem('cafe-local-users', JSON.stringify(localUsers));
     }
@@ -1826,8 +1827,11 @@ function renderSuperAdminPanel() {
       <button class="super-tab ${appState.superAdminTab === 'users' ? 'active' : ''}" data-super-tab="users">
         Usuários (${appState.superUsers.length})
       </button>
+      <button class="super-tab ${appState.superAdminTab === 'suppliers' ? 'active' : ''}" data-super-tab="suppliers">
+        Fornecedores (${appState.superUsers.filter(u => u.role === 'supplier' || u.requestSupplierStatus === 'approved').length})
+      </button>
       <button class="super-tab ${appState.superAdminTab === 'requests' ? 'active' : ''}" data-super-tab="requests">
-        Solicitações (${appState.superRequests.filter(r => r.status === 'pending').length} pendentes)
+        Solicitações (${appState.superRequests.filter(r => r.status === 'pending').length + appState.superUsers.filter(u => u.requestSupplierStatus === 'pending').length} pendentes)
       </button>
     </div>
 
@@ -1915,43 +1919,125 @@ function renderSuperAdminTabContent() {
   if (appState.superAdminTab === 'users') {
     return `
       <div class="section-title">
-        <h2>Usuários Registrados</h2>
-        <button id="superCreateUserBtn" class="primary">+ Adicionar Usuário</button>
+        <h2>Usuários Registrados no Sistema</h2>
+        <button id="superCreateUserBtn" class="primary">+ Criar Novo Usuário</button>
       </div>
       <div class="admin-table-container">
         <table class="admin-table">
           <thead>
             <tr>
               <th>Nome</th>
-              <th>E-mail</th>
-              <th>Grupo</th>
-              <th>Cargo</th>
-              <th>Criar Grupo?</th>
+              <th>Contato & E-mail</th>
+              <th>Grupo Vinculado</th>
+              <th>Cargo / Função</th>
+              <th>Status</th>
               <th style="text-align:right;">Ações</th>
             </tr>
           </thead>
           <tbody>
             ${appState.superUsers.map((u) => {
+              const uUid = u.uid || u.id;
               const group = appState.superGroups.find((g) => g.id === u.groupId);
+              const isBlocked = u.accountStatus === 'blocked';
+              let roleBadge = 'badge-role user';
+              let roleLabel = 'Membro';
+              if (u.role === 'admin') { roleBadge = 'badge-role admin'; roleLabel = 'Líder de Grupo'; }
+              else if (u.role === 'supplier') { roleBadge = 'badge-role supplier'; roleLabel = 'Fornecedor'; }
+
               return `
                 <tr>
                   <td><strong>${u.name}</strong></td>
-                  <td>${u.email}</td>
-                  <td>${group ? group.name : '<span style="color:var(--muted)">Nenhum</span>'}</td>
-                  <td><span class="badge-role ${u.role}">${u.role === 'admin' ? 'Líder' : 'Membro'}</span></td>
                   <td>
-                    <button class="toggle-user-can-create-btn secondary" style="font-size:0.75rem; padding:0.3rem 0.6rem;" data-user-uid="${u.uid}">
-                      ${u.canCreateGroup ? 'Sim (Remover)' : 'Não (Dar Permissão)'}
-                    </button>
+                    ${u.email}<br>
+                    <small style="color:var(--muted); font-size:0.75rem;">${u.phone || 'Sem telefone'}</small>
                   </td>
-                  <td style="text-align:right; display:flex; gap:0.4rem; justify-content:flex-end;">
-                    <button class="edit-user-super-btn secondary" style="font-size:0.75rem; padding:0.4rem 0.8rem;" data-user-uid="${u.uid}">Editar</button>
-                    <button class="delete-user-super-btn danger" style="font-size:0.75rem; padding:0.4rem 0.8rem;" data-user-uid="${u.uid}">Remover</button>
+                  <td>${group ? group.name : '<span style="color:var(--muted)">Nenhum</span>'}</td>
+                  <td><span class="${roleBadge}">${roleLabel}</span></td>
+                  <td>
+                    <span class="status-pill ${isBlocked ? 'cancelado' : 'pago'}">
+                      ${isBlocked ? 'BLOQUEADO' : 'ATIVO'}
+                    </span>
+                  </td>
+                  <td style="text-align:right; display:flex; gap:0.4rem; justify-content:flex-end; flex-wrap:wrap;">
+                    <button class="edit-user-super-btn secondary" style="font-size:0.75rem; padding:0.35rem 0.65rem;" data-user-uid="${uUid}">
+                      Editar Perfil
+                    </button>
+                    <button class="toggle-user-status-btn secondary" style="font-size:0.75rem; padding:0.35rem 0.65rem;" data-user-uid="${uUid}">
+                      ${isBlocked ? 'Desbloquear' : 'Bloquear'}
+                    </button>
+                    <button class="delete-user-super-btn danger" style="font-size:0.75rem; padding:0.35rem 0.65rem;" data-user-uid="${uUid}">
+                      Remover
+                    </button>
                   </td>
                 </tr>
               `;
             }).join('')}
             ${appState.superUsers.length === 0 ? '<tr><td colspan="6" class="hint" style="text-align:center;">Nenhum usuário cadastrado.</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  if (appState.superAdminTab === 'suppliers') {
+    const suppliers = appState.superUsers.filter(u => u.role === 'supplier' || u.requestSupplierStatus === 'approved');
+    return `
+      <div class="section-title">
+        <h2>Fornecedores Parceiros Cadastrados</h2>
+        <button id="superCreateSupplierBtn" class="primary">+ Incluir Novo Fornecedor</button>
+      </div>
+      <div class="admin-table-container">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Empresa / Fornecedor</th>
+              <th>E-mail & Contato</th>
+              <th>Cidade / UF</th>
+              <th>Ofertas Cadastradas</th>
+              <th>Status</th>
+              <th style="text-align:right;">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${suppliers.map((s) => {
+              const sUid = s.uid || s.id;
+              const productCount = appState.products.filter(p => p.supplierId === sUid).length;
+              const isBlocked = s.accountStatus === 'blocked';
+              return `
+                <tr>
+                  <td>
+                    <strong>${s.name}</strong>
+                    ${s.document ? `<br><small style="color:var(--muted); font-size:0.7rem;">CNPJ/Doc: ${s.document}</small>` : ''}
+                  </td>
+                  <td>
+                    ${s.email}<br>
+                    <small style="color:var(--muted); font-size:0.75rem;">${s.phone || 'Sem telefone'}</small>
+                  </td>
+                  <td>${s.cityState || 'Não informada'}</td>
+                  <td><strong>${productCount}</strong> oferta(s)</td>
+                  <td>
+                    <span class="status-pill ${isBlocked ? 'cancelado' : 'pago'}">
+                      ${isBlocked ? 'SUSPENSO' : 'ATIVO'}
+                    </span>
+                  </td>
+                  <td style="text-align:right; display:flex; gap:0.4rem; justify-content:flex-end; flex-wrap:wrap;">
+                    <button class="view-supplier-products-btn secondary" style="font-size:0.75rem; padding:0.35rem 0.65rem;" data-supplier-id="${sUid}">
+                      Ver Ofertas (${productCount})
+                    </button>
+                    <button class="edit-supplier-super-btn secondary" style="font-size:0.75rem; padding:0.35rem 0.65rem;" data-supplier-id="${sUid}">
+                      Editar
+                    </button>
+                    <button class="toggle-supplier-status-btn secondary" style="font-size:0.75rem; padding:0.35rem 0.65rem;" data-supplier-id="${sUid}">
+                      ${isBlocked ? 'Ativar' : 'Suspender'}
+                    </button>
+                    <button class="delete-supplier-super-btn danger" style="font-size:0.75rem; padding:0.35rem 0.65rem;" data-supplier-id="${sUid}">
+                      Excluir
+                    </button>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+            ${suppliers.length === 0 ? '<tr><td colspan="6" class="hint" style="text-align:center;">Nenhum fornecedor cadastrado até o momento.</td></tr>' : ''}
           </tbody>
         </table>
       </div>
@@ -2317,57 +2403,124 @@ function bindSuperAdminEvents() {
     });
   });
 
-  // Edit User profile/groups
+  // Expanded Edit User Profile / Characteristics
   document.querySelectorAll('.edit-user-super-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const userUid = btn.getAttribute('data-user-uid');
-      const user = appState.superUsers.find(u => u.uid === userUid);
+      const user = appState.superUsers.find(u => (u.uid === userUid || u.id === userUid));
       if (!user) return;
 
       showModal({
-        title: `Editar Usuário: ${user.name}`,
+        title: `Editar Características do Usuário: ${user.name}`,
         bodyHtml: `
-          <form id="modalSuperEditUser" style="margin-top:0;">
+          <form id="modalSuperEditUser" style="margin-top:0; display:grid; gap:0.75rem;">
             <div class="form-group">
-              <label for="editUserName">Nome</label>
-              <input type="text" id="editUserName" value="${user.name}" required />
+              <label for="editUserName">Nome Completo</label>
+              <input type="text" id="editUserName" value="${user.name || ''}" required />
             </div>
-            <div class="form-group">
-              <label for="editUserGroup">Grupo Vinculado</label>
-              <select id="editUserGroup">
-                <option value="">Nenhum</option>
-                ${appState.superGroups.map(g => `<option value="${g.id}" ${g.id === user.groupId ? 'selected' : ''}>${g.name}</option>`).join('')}
-              </select>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+              <div class="form-group">
+                <label for="editUserEmail">E-mail</label>
+                <input type="email" id="editUserEmail" value="${user.email || ''}" required />
+              </div>
+              <div class="form-group">
+                <label for="editUserPhone">Telefone / WhatsApp</label>
+                <input type="text" id="editUserPhone" value="${user.phone || ''}" placeholder="(00) 00000-0000" />
+              </div>
             </div>
-            <div class="form-group">
-              <label for="editUserRole">Papel no Grupo</label>
-              <select id="editUserRole" required>
-                <option value="user" ${user.role === 'user' ? 'selected' : ''}>Membro Comum (User)</option>
-                <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Líder do Grupo (Admin)</option>
-              </select>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+              <div class="form-group">
+                <label for="editUserRole">Cargo / Função</label>
+                <select id="editUserRole" required>
+                  <option value="user" ${user.role === 'user' ? 'selected' : ''}>Membro (User)</option>
+                  <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Líder de Grupo (Admin)</option>
+                  <option value="supplier" ${user.role === 'supplier' ? 'selected' : ''}>Fornecedor (Supplier)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="editUserGroup">Grupo Vinculado</label>
+                <select id="editUserGroup">
+                  <option value="">Nenhum Grupo</option>
+                  ${appState.superGroups.map(g => `<option value="${g.id}" ${g.id === user.groupId ? 'selected' : ''}>${g.name}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+              <div class="form-group">
+                <label for="editUserStatus">Status da Conta</label>
+                <select id="editUserStatus">
+                  <option value="active" ${user.accountStatus !== 'blocked' ? 'selected' : ''}>Ativa</option>
+                  <option value="blocked" ${user.accountStatus === 'blocked' ? 'selected' : ''}>Bloqueada / Suspensa</option>
+                </select>
+              </div>
+              <div class="form-group" style="justify-content:center;">
+                <label style="cursor:pointer; display:flex; align-items:center; gap:0.5rem; margin-top:1.2rem; font-size:0.8rem; color:var(--text);">
+                  <input type="checkbox" id="editUserCanCreate" ${user.canCreateGroup ? 'checked' : ''} style="width:auto; margin:0;" />
+                  Permissão de Criar Grupo?
+                </label>
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+              <div class="form-group">
+                <label for="editUserRoast">Torra Preferida</label>
+                <select id="editUserRoast">
+                  <option value="Média" ${user.preferredRoast === 'Média' ? 'selected' : ''}>Média (Equilibrada)</option>
+                  <option value="Clara" ${user.preferredRoast === 'Clara' ? 'selected' : ''}>Clara (Frutada)</option>
+                  <option value="Escura" ${user.preferredRoast === 'Escura' ? 'selected' : ''}>Escura (Intensa)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="editUserMethod">Método Preferido</label>
+                <select id="editUserMethod">
+                  <option value="V60" ${user.preferredMethod === 'V60' ? 'selected' : ''}>Hario V60</option>
+                  <option value="Espresso" ${user.preferredMethod === 'Espresso' ? 'selected' : ''}>Espresso</option>
+                  <option value="Aeropress" ${user.preferredMethod === 'Aeropress' ? 'selected' : ''}>Aeropress</option>
+                  <option value="Prensa Francesa" ${user.preferredMethod === 'Prensa Francesa' ? 'selected' : ''}>Prensa Francesa</option>
+                </select>
+              </div>
             </div>
           </form>
         `,
-        confirmText: 'Salvar Usuário',
+        confirmText: 'Salvar Alterações',
         onConfirm: async (modalEl) => {
           const name = modalEl.querySelector('#editUserName').value.trim();
-          const groupId = modalEl.querySelector('#editUserGroup').value;
+          const email = modalEl.querySelector('#editUserEmail').value.trim();
+          const phone = modalEl.querySelector('#editUserPhone').value.trim();
           const role = modalEl.querySelector('#editUserRole').value;
+          const groupId = modalEl.querySelector('#editUserGroup').value || null;
+          const accountStatus = modalEl.querySelector('#editUserStatus').value;
+          const canCreateGroup = modalEl.querySelector('#editUserCanCreate').checked;
+          const preferredRoast = modalEl.querySelector('#editUserRoast').value;
+          const preferredMethod = modalEl.querySelector('#editUserMethod').value;
 
-          if (!name) return false;
+          if (!name || !email) {
+            showToast('Preencha nome e e-mail válidos.', 'warning');
+            return false;
+          }
+
+          const updatedFields = {
+            name,
+            email,
+            phone,
+            role,
+            groupId,
+            accountStatus,
+            canCreateGroup,
+            preferredRoast,
+            preferredMethod
+          };
 
           try {
             if (appState.firebaseMode) {
               const batch = db.batch();
-              batch.update(db.collection('users').doc(userUid), { name, groupId: groupId || null, role });
-              
+              batch.update(db.collection('users').doc(userUid), updatedFields);
               if (role === 'admin' && groupId) {
                 batch.update(db.collection('groups').doc(groupId), { adminId: userUid });
               }
               await batch.commit();
             } else {
               appState.superUsers = appState.superUsers.map((u) => {
-                if (u.uid === userUid) return { ...u, name, groupId: groupId || null, role };
+                if (u.uid === userUid || u.id === userUid) return { ...u, ...updatedFields };
                 return u;
               });
               if (role === 'admin' && groupId) {
@@ -2376,9 +2529,9 @@ function bindSuperAdminEvents() {
               saveLocalData();
             }
 
-            showToast('Perfil de usuário atualizado!');
+            showToast(`Perfil de ${name} atualizado com sucesso!`);
             if (appState.firebaseMode) {
-              await loadFirebaseData(appState.user.uid);
+              await loadSuperAdminData();
             }
             render();
             return true;
@@ -2388,6 +2541,29 @@ function bindSuperAdminEvents() {
           }
         }
       });
+    });
+  });
+
+  // Toggle user account status (Bloquear / Desbloquear)
+  document.querySelectorAll('.toggle-user-status-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const uUid = btn.getAttribute('data-user-uid');
+      const user = appState.superUsers.find(u => (u.uid === uUid || u.id === uUid));
+      if (!user) return;
+
+      const nextStatus = user.accountStatus === 'blocked' ? 'active' : 'blocked';
+      try {
+        if (appState.firebaseMode) {
+          await db.collection('users').doc(uUid).update({ accountStatus: nextStatus });
+        } else {
+          appState.superUsers = appState.superUsers.map(u => (u.uid === uUid || u.id === uUid) ? { ...u, accountStatus: nextStatus } : u);
+          saveLocalData();
+        }
+        showToast(`Conta de ${user.name} ${nextStatus === 'blocked' ? 'bloqueada' : 'desbloqueada'}.`);
+        render();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
     });
   });
 
@@ -2533,6 +2709,258 @@ function bindSuperAdminEvents() {
       } finally {
         appState.loading = false;
         render();
+      }
+    });
+  });
+
+  // Add Supplier Manually
+  document.getElementById('superCreateSupplierBtn')?.addEventListener('click', () => {
+    showModal({
+      title: 'Incluir Novo Fornecedor Parceiro',
+      bodyHtml: `
+        <form id="modalSuperCreateSupplier" style="margin-top:0; display:grid; gap:0.75rem;">
+          <div class="form-group">
+            <label for="supplierName">Razão Social / Nome da Empresa</label>
+            <input type="text" id="supplierName" placeholder="Ex: Torrefação Cerrado Mineiro" required />
+          </div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+            <div class="form-group">
+              <label for="supplierEmail">E-mail de Contato</label>
+              <input type="email" id="supplierEmail" placeholder="contato@empresa.com.br" required />
+            </div>
+            <div class="form-group">
+              <label for="supplierPhone">Telefone / WhatsApp</label>
+              <input type="text" id="supplierPhone" placeholder="(00) 00000-0000" required />
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+            <div class="form-group">
+              <label for="supplierCity">Cidade / Estado</label>
+              <input type="text" id="supplierCity" placeholder="Ex: Patrocínio - MG" required />
+            </div>
+            <div class="form-group">
+              <label for="supplierDocument">CNPJ / CPF</label>
+              <input type="text" id="supplierDocument" placeholder="00.000.000/0000-00" />
+            </div>
+          </div>
+        </form>
+      `,
+      confirmText: 'Cadastrar Fornecedor',
+      onConfirm: async (modalEl) => {
+        const name = modalEl.querySelector('#supplierName').value.trim();
+        const email = modalEl.querySelector('#supplierEmail').value.trim();
+        const phone = modalEl.querySelector('#supplierPhone').value.trim();
+        const cityState = modalEl.querySelector('#supplierCity').value.trim();
+        const document = modalEl.querySelector('#supplierDocument').value.trim();
+
+        if (!name || !email) {
+          showToast('Informe o nome da empresa e o e-mail.', 'warning');
+          return false;
+        }
+
+        const newSupplier = {
+          name,
+          email,
+          phone,
+          cityState,
+          document,
+          role: 'supplier',
+          requestSupplierStatus: 'approved',
+          accountStatus: 'active',
+          canCreateGroup: false,
+          createdAt: new Date().toISOString()
+        };
+
+        try {
+          if (appState.firebaseMode) {
+            const ref = await db.collection('users').add(newSupplier);
+            newSupplier.uid = ref.id;
+          } else {
+            newSupplier.uid = 'supplier-' + crypto.randomUUID();
+            appState.superUsers.unshift(newSupplier);
+            saveLocalData();
+          }
+
+          showToast(`Fornecedor ${name} cadastrado com sucesso!`);
+          if (appState.firebaseMode) {
+            await loadSuperAdminData();
+          }
+          render();
+          return true;
+        } catch (error) {
+          showToast(error.message, 'error');
+          return false;
+        }
+      }
+    });
+  });
+
+  // Edit Supplier Details
+  document.querySelectorAll('.edit-supplier-super-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sId = btn.getAttribute('data-supplier-id');
+      const supplier = appState.superUsers.find(u => (u.uid === sId || u.id === sId));
+      if (!supplier) return;
+
+      showModal({
+        title: `Editar Fornecedor: ${supplier.name}`,
+        bodyHtml: `
+          <form id="modalSuperEditSupplier" style="margin-top:0; display:grid; gap:0.75rem;">
+            <div class="form-group">
+              <label for="editSupplierName">Empresa / Razão Social</label>
+              <input type="text" id="editSupplierName" value="${supplier.name || ''}" required />
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+              <div class="form-group">
+                <label for="editSupplierEmail">E-mail</label>
+                <input type="email" id="editSupplierEmail" value="${supplier.email || ''}" required />
+              </div>
+              <div class="form-group">
+                <label for="editSupplierPhone">Telefone / WhatsApp</label>
+                <input type="text" id="editSupplierPhone" value="${supplier.phone || ''}" />
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+              <div class="form-group">
+                <label for="editSupplierCity">Cidade / UF</label>
+                <input type="text" id="editSupplierCity" value="${supplier.cityState || ''}" />
+              </div>
+              <div class="form-group">
+                <label for="editSupplierDoc">CNPJ / Documento</label>
+                <input type="text" id="editSupplierDoc" value="${supplier.document || ''}" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="editSupplierStatus">Status do Fornecedor</label>
+              <select id="editSupplierStatus">
+                <option value="active" ${supplier.accountStatus !== 'blocked' ? 'selected' : ''}>Ativo</option>
+                <option value="blocked" ${supplier.accountStatus === 'blocked' ? 'selected' : ''}>Suspenso / Inativo</option>
+              </select>
+            </div>
+          </form>
+        `,
+        confirmText: 'Salvar Fornecedor',
+        onConfirm: async (modalEl) => {
+          const name = modalEl.querySelector('#editSupplierName').value.trim();
+          const email = modalEl.querySelector('#editSupplierEmail').value.trim();
+          const phone = modalEl.querySelector('#editSupplierPhone').value.trim();
+          const cityState = modalEl.querySelector('#editSupplierCity').value.trim();
+          const document = modalEl.querySelector('#editSupplierDoc').value.trim();
+          const accountStatus = modalEl.querySelector('#editSupplierStatus').value;
+
+          if (!name || !email) return false;
+
+          const updatedData = { name, email, phone, cityState, document, accountStatus };
+
+          try {
+            if (appState.firebaseMode) {
+              await db.collection('users').doc(sId).update(updatedData);
+            } else {
+              appState.superUsers = appState.superUsers.map(u => (u.uid === sId || u.id === sId) ? { ...u, ...updatedData } : u);
+              saveLocalData();
+            }
+
+            showToast(`Fornecedor ${name} atualizado!`);
+            if (appState.firebaseMode) {
+              await loadSuperAdminData();
+            }
+            render();
+            return true;
+          } catch (error) {
+            showToast(error.message, 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
+
+  // Delete Supplier
+  document.querySelectorAll('.delete-supplier-super-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sId = btn.getAttribute('data-supplier-id');
+      const supplier = appState.superUsers.find(u => (u.uid === sId || u.id === sId));
+      if (!supplier) return;
+
+      showModal({
+        title: 'Excluir Fornecedor Parceiro?',
+        bodyHtml: `
+          <p>Você tem certeza que deseja excluir o fornecedor <strong>${supplier.name}</strong> (${supplier.email})?</p>
+          <p style="color:var(--error); font-size:0.8rem; margin-top:0.5rem">
+            Aviso: Esta ação removerá o perfil do fornecedor e desativará suas ofertas associadas.
+          </p>
+        `,
+        confirmText: 'Excluir Fornecedor',
+        onConfirm: async () => {
+          try {
+            if (appState.firebaseMode) {
+              await db.collection('users').doc(sId).delete();
+            } else {
+              appState.superUsers = appState.superUsers.filter(u => (u.uid !== sId && u.id !== sId));
+              appState.products = appState.products.filter(p => p.supplierId !== sId);
+              saveLocalData();
+            }
+
+            showToast('Fornecedor removido com sucesso!');
+            if (appState.firebaseMode) {
+              await loadSuperAdminData();
+            }
+            render();
+            return true;
+          } catch (error) {
+            showToast(error.message, 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
+
+  // View Supplier Products
+  document.querySelectorAll('.view-supplier-products-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sId = btn.getAttribute('data-supplier-id');
+      const supplier = appState.superUsers.find(u => (u.uid === sId || u.id === sId));
+      const supplierProducts = appState.products.filter(p => p.supplierId === sId);
+
+      const productsListHtml = supplierProducts.length > 0 ? supplierProducts.map(p => `
+        <div style="padding:0.85rem; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+          <div>
+            <strong style="color:var(--accent-strong);">${p.name}</strong><br>
+            <small style="color:var(--muted)">Preço: R$ ${Number(p.pricePerKg).toFixed(2)}/kg | Estoque: ${p.availableQty}kg | Validade: ${p.deadline}</small>
+          </div>
+        </div>
+      `).join('') : '<p class="hint" style="text-align:center;">Nenhuma oferta de café publicada por este fornecedor.</p>';
+
+      showModal({
+        title: `Ofertas de Café: ${supplier?.name || 'Fornecedor'}`,
+        bodyHtml: `<div>${productsListHtml}</div>`,
+        confirmText: 'Fechar',
+        cancelText: '',
+        onConfirm: () => true
+      });
+    });
+  });
+
+  // Toggle Supplier Status (Ativar / Suspender)
+  document.querySelectorAll('.toggle-supplier-status-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const sId = btn.getAttribute('data-supplier-id');
+      const supplier = appState.superUsers.find(u => (u.uid === sId || u.id === sId));
+      if (!supplier) return;
+
+      const nextStatus = supplier.accountStatus === 'blocked' ? 'active' : 'blocked';
+      try {
+        if (appState.firebaseMode) {
+          await db.collection('users').doc(sId).update({ accountStatus: nextStatus });
+        } else {
+          appState.superUsers = appState.superUsers.map(u => (u.uid === sId || u.id === sId) ? { ...u, accountStatus: nextStatus } : u);
+          saveLocalData();
+        }
+        showToast(`Status do fornecedor ${supplier.name} alterado para ${nextStatus === 'blocked' ? 'Suspenso' : 'Ativo'}.`);
+        render();
+      } catch (err) {
+        showToast(err.message, 'error');
       }
     });
   });

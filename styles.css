@@ -1202,6 +1202,7 @@ button.danger:hover {
 }
 .badge-role.admin { background: rgba(212, 144, 62, 0.15); color: var(--accent-strong); }
 .badge-role.user { background: rgba(255, 255, 255, 0.08); color: var(--muted); }
+.badge-role.supplier, .badge-role.pro { background: rgba(139, 92, 246, 0.18); color: #c084fc; }
 
 /* Sub-tabs for super admin */
 .super-tabs {
