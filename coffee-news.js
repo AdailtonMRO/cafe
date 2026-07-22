@@ -18,7 +18,7 @@ export const coffeeNews = [
     category: 'Cultura',
     blurb: 'Eventos, degustações e encontros de comunidade aproximam pessoas e transformam o café em um ritual compartilhado.',
     accent: 'Ritual moderno',
-    image: 'assets/coffee-plantation.png',
+    image: 'assets/espresso.png',
   },
 ];
 

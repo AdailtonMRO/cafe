@@ -691,8 +691,7 @@ function render() {
           <button id="exploreButton" type="button" class="primary">Explorar e Entrar</button>
         </div>
         <div class="hero-visual">
-          <img src="assets/coffee-plantation.png" alt="Plantação de café especial nas montanhas ao amanhecer" />
-          <span class="hero-image-badge">Terroir & Origem</span>
+          <img src="assets/coffee-hero.svg" alt="Ilustração de uma xícara e grãos de café" />
         </div>
         <div class="hero-panel">
           <div class="metric">
