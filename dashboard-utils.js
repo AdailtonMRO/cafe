@@ -17,3 +17,28 @@ export function buildConsumerRanking(participations, currentUserId, currentUserN
 
   return rankings.sort((a, b) => b.totalKg - a.totalKg);
 }
+
+export function calculateMemberFreightShare(order, participation, allOrderParticipations) {
+  const freightCost = Number(order?.freightCost || 0);
+  const freightType = order?.freightType || 'proportional';
+
+  if (freightCost <= 0 || freightType === 'free') {
+    return 0;
+  }
+
+  if (freightType === 'proportional') {
+    const totalKg = (allOrderParticipations || []).reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
+    if (totalKg <= 0) return 0;
+    const share = (Number(participation.quantityKg || 0) / totalKg) * freightCost;
+    return Number(share.toFixed(2));
+  }
+
+  if (freightType === 'equal') {
+    const memberCount = (allOrderParticipations || []).length;
+    if (memberCount <= 0) return 0;
+    const share = freightCost / memberCount;
+    return Number(share.toFixed(2));
+  }
+
+  return 0;
+}

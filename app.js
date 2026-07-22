@@ -34,6 +34,31 @@ function calculateTotal(quantityKg, pricePerKg) {
   return Number((quantityKg * pricePerKg).toFixed(2));
 }
 
+function calculateMemberFreightShare(order, participation, allOrderParticipations) {
+  const freightCost = Number(order?.freightCost || 0);
+  const freightType = order?.freightType || 'proportional';
+
+  if (freightCost <= 0 || freightType === 'free') {
+    return 0;
+  }
+
+  if (freightType === 'proportional') {
+    const totalKg = (allOrderParticipations || []).reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
+    if (totalKg <= 0) return 0;
+    const share = (Number(participation.quantityKg || 0) / totalKg) * freightCost;
+    return Number(share.toFixed(2));
+  }
+
+  if (freightType === 'equal') {
+    const memberCount = (allOrderParticipations || []).length;
+    if (memberCount <= 0) return 0;
+    const share = freightCost / memberCount;
+    return Number(share.toFixed(2));
+  }
+
+  return 0;
+}
+
 function isPlaceholder(value) {
   if (!value) return true;
   const normalized = String(value).trim();
@@ -3168,21 +3193,33 @@ function renderUserOrdersSection() {
     const orderParticipations = appState.participations.filter((p) => p.orderId === order.id);
     const totalKg = orderParticipations.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
 
+    const freightCost = Number(order.freightCost || 0);
+    const freightType = order.freightType || 'proportional';
+    let freightBadge = '<span class="pill" style="font-size:0.7rem; background:rgba(74,222,128,0.12); color:var(--success);">🚚 Frete Grátis</span>';
+    if (freightCost > 0 && freightType !== 'free') {
+      const typeLabel = freightType === 'equal' ? 'Divisão Igualitária' : 'Rateio por kg';
+      freightBadge = `<span class="pill" style="font-size:0.7rem; background:rgba(212,144,62,0.15); color:var(--accent-strong);">🚚 Frete R$ ${freightCost.toFixed(2)} (${typeLabel})</span>`;
+    }
+
     if (myParticipation) {
-      // Already participating — show summary card
+      const coffeeVal = calculateTotal(myParticipation.quantityKg, order.pricePerKg);
+      const freightVal = calculateMemberFreightShare(order, myParticipation, orderParticipations);
+      const totalPayable = coffeeVal + freightVal;
+
       return `
         <article class="order-item order-item--joined">
           <div class="order-details" style="flex:1;">
-            <strong>${order.type}</strong>
-            <p>R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
+            <strong>${order.type}</strong> ${freightBadge}
+            <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
               <span class="status-pill pago" style="background:rgba(74,222,128,0.15);">✔ Você pediu ${Number(myParticipation.quantityKg).toFixed(2)} kg</span>
               <span style="font-size:0.8rem; color:var(--muted);">Total do grupo: ${totalKg.toFixed(2)} kg</span>
             </div>
           </div>
           <div class="actions" style="align-items:flex-end;">
-            <span style="color:var(--success); font-size:0.85rem; font-weight:700;">R$ ${Number(myParticipation.valueTotal).toFixed(2)}</span>
-            <span class="status-pill ${myParticipation.paymentStatus}" style="font-size:0.7rem;">${myParticipation.paymentStatus.toUpperCase()}</span>
+            <span style="color:var(--success); font-size:0.85rem; font-weight:700;">R$ ${totalPayable.toFixed(2)}</span>
+            ${freightVal > 0 ? `<small style="font-size:0.7rem; color:var(--muted); text-align:right;">(Café R$ ${coffeeVal.toFixed(2)} + Frete R$ ${freightVal.toFixed(2)})</small>` : ''}
+            <span class="status-pill ${myParticipation.paymentStatus}" style="font-size:0.7rem; margin-top:0.2rem;">${myParticipation.paymentStatus.toUpperCase()}</span>
           </div>
         </article>
       `;
@@ -3192,8 +3229,8 @@ function renderUserOrdersSection() {
     return `
       <article class="order-item order-item--available">
         <div class="order-details" style="flex:1;">
-          <strong>${order.type}</strong>
-          <p>R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
+          <strong>${order.type}</strong> ${freightBadge}
+          <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
           <p style="font-size:0.8rem; color:var(--muted); margin-top:0.2rem;">Grupo já solicitou: ${totalKg.toFixed(2)} kg</p>
         </div>
         <div class="actions" style="min-width:210px;">
@@ -3263,7 +3300,11 @@ function renderAdminParticipationsSection() {
     const order = appState.orders.find((o) => o.id === orderId);
     const orderName = order ? order.type : `Pedido (${orderId.slice(0, 6)}...)`;
     const totalKg = parts.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
-    const totalValue = parts.reduce((sum, p) => sum + Number(p.valueTotal || 0), 0);
+    const coffeeTotal = parts.reduce((sum, p) => sum + (order ? calculateTotal(p.quantityKg, order.pricePerKg) : Number(p.valueTotal || 0)), 0);
+    const freightCost = order ? Number(order.freightCost || 0) : 0;
+    const freightType = order ? (order.freightType || 'proportional') : 'proportional';
+    const totalOrderValue = coffeeTotal + (freightType === 'free' ? 0 : freightCost);
+
     const paidCount = parts.filter((p) => p.paymentStatus === 'pago').length;
     const receivedCount = parts.filter((p) => p.pickupStatus === 'recebido').length;
 
@@ -3274,11 +3315,12 @@ function renderAdminParticipationsSection() {
             <strong style="color:var(--accent-strong);">${orderName}</strong>
             <span style="font-size:0.8rem; color:var(--muted); margin-left:0.75rem;">${order ? `R$ ${Number(order.pricePerKg).toFixed(2)}/kg` : ''}</span>
           </div>
-          <div class="participation-totals">
+          <div class="participation-totals" style="gap:0.75rem; flex-wrap:wrap;">
             <span>📦 <strong>${totalKg.toFixed(2)} kg</strong></span>
-            <span>💰 <strong>R$ ${totalValue.toFixed(2)}</strong></span>
+            <span>💰 Café: <strong>R$ ${coffeeTotal.toFixed(2)}</strong></span>
+            ${freightCost > 0 ? `<span>🚚 Frete: <strong>R$ ${freightCost.toFixed(2)}</strong></span>` : ''}
+            <span>💳 Total Lote: <strong>R$ ${totalOrderValue.toFixed(2)}</strong></span>
             <span style="color:var(--success);">✅ ${paidCount}/${parts.length} pagos</span>
-            <span style="color:var(--warning);">📬 ${receivedCount}/${parts.length} retirados</span>
           </div>
         </div>
         <div class="admin-table-container">
@@ -3287,7 +3329,7 @@ function renderAdminParticipationsSection() {
               <tr>
                 <th>Membro</th>
                 <th>Quantidade</th>
-                <th>Valor</th>
+                <th>Valor Total</th>
                 <th>Pagamento</th>
                 <th>Retirada</th>
               </tr>
@@ -3406,6 +3448,11 @@ function renderUserParticipationsSection() {
           const order = appState.orders.find((o) => o.id === p.orderId);
           const orderName = order ? order.type : `Pedido encerrado`;
           const isOrderClosed = order ? order.status !== 'aberto' : true;
+
+          const orderParticipations = order ? appState.participations.filter(op => op.orderId === order.id) : [p];
+          const coffeeVal = order ? calculateTotal(p.quantityKg, order.pricePerKg) : Number(p.valueTotal || 0);
+          const freightVal = order ? calculateMemberFreightShare(order, p, orderParticipations) : 0;
+          const itemTotal = coffeeVal + freightVal;
           
           let statusText = '⏳ Pag. Pendente';
           if (p.paymentStatus === 'pago') statusText = '✔ Pago';
@@ -3417,7 +3464,10 @@ function renderUserParticipationsSection() {
             <article class="order-item" style="border-left:3px solid var(--${p.paymentStatus === 'pago' ? 'success' : (p.paymentStatus === 'confirmando' ? 'warning' : 'error')});">
               <div class="order-details" style="flex:1;">
                 <strong>${orderName}</strong>
-                <p>${Number(p.quantityKg).toFixed(2)} kg — R$ ${Number(p.valueTotal).toFixed(2)}</p>
+                <p style="margin-top:0.2rem;">
+                  <strong>${Number(p.quantityKg).toFixed(2)} kg</strong> — Total: <strong style="color:var(--accent-strong);">R$ ${itemTotal.toFixed(2)}</strong>
+                  ${freightVal > 0 ? `<br><small style="color:var(--muted); font-size:0.75rem;">(Café R$ ${coffeeVal.toFixed(2)} + Frete R$ ${freightVal.toFixed(2)})</small>` : ''}
+                </p>
                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                   <span class="status-pill ${p.paymentStatus}">${statusText}</span>
                   <span class="status-pill ${p.pickupStatus}">${p.pickupStatus === 'recebido' ? '✔ Recebido' : '📬 Aguardando Retirada'}</span>
@@ -3763,6 +3813,20 @@ function bindAdminEvents() {
             <label for="orderPrice">Valor do Quilo (R$)</label>
             <input type="number" id="orderPrice" min="0.01" step="0.01" placeholder="Ex: 80.00" required />
           </div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+            <div class="form-group">
+              <label for="orderFreightCost">Valor do Frete (R$)</label>
+              <input type="number" id="orderFreightCost" min="0" step="0.01" value="0.00" placeholder="Ex: 30.00" />
+            </div>
+            <div class="form-group">
+              <label for="orderFreightType">Rateio do Frete</label>
+              <select id="orderFreightType">
+                <option value="proportional">Proporcional (por kg)</option>
+                <option value="equal">Igualitário (por membro)</option>
+                <option value="free">Frete Grátis / Incluso</option>
+              </select>
+            </div>
+          </div>
           <div class="form-group">
             <label for="orderDeadline">Data Limite de Pedidos</label>
             <input type="date" id="orderDeadline" required />
@@ -3794,6 +3858,8 @@ function bindAdminEvents() {
         const type = modalEl.querySelector('#orderType').value.trim();
         const pricePerKg = Number(modalEl.querySelector('#orderPrice').value);
         const deadline = modalEl.querySelector('#orderDeadline').value;
+        const freightCost = Number(modalEl.querySelector('#orderFreightCost').value || 0);
+        const freightType = modalEl.querySelector('#orderFreightType').value;
 
         if (!type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
           showToast('Preencha os dados de forma correta.', 'warning');
@@ -3803,6 +3869,8 @@ function bindAdminEvents() {
         const newOrder = {
           type,
           pricePerKg,
+          freightCost,
+          freightType,
           openingDate: new Date().toISOString().slice(0, 10),
           deadline,
           status: 'aberto',
@@ -3861,6 +3929,20 @@ function bindAdminEvents() {
               <label for="editPrice">Valor do Quilo (R$)</label>
               <input type="number" id="editPrice" min="0.01" step="0.01" value="${order.pricePerKg}" required />
             </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+              <div class="form-group">
+                <label for="editFreightCost">Valor do Frete (R$)</label>
+                <input type="number" id="editFreightCost" min="0" step="0.01" value="${order.freightCost || 0}" />
+              </div>
+              <div class="form-group">
+                <label for="editFreightType">Rateio do Frete</label>
+                <select id="editFreightType">
+                  <option value="proportional" ${order.freightType === 'proportional' || !order.freightType ? 'selected' : ''}>Proporcional (por kg)</option>
+                  <option value="equal" ${order.freightType === 'equal' ? 'selected' : ''}>Igualitário (por membro)</option>
+                  <option value="free" ${order.freightType === 'free' ? 'selected' : ''}>Frete Grátis / Incluso</option>
+                </select>
+              </div>
+            </div>
             <div class="form-group">
               <label for="editDeadline">Data Limite</label>
               <input type="date" id="editDeadline" value="${order.deadline}" required />
@@ -3881,6 +3963,8 @@ function bindAdminEvents() {
           const pricePerKg = Number(modalEl.querySelector('#editPrice').value);
           const deadline = modalEl.querySelector('#editDeadline').value;
           const status = modalEl.querySelector('#editStatus').value;
+          const freightCost = Number(modalEl.querySelector('#editFreightCost').value || 0);
+          const freightType = modalEl.querySelector('#editFreightType').value;
 
           if (!type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
             showToast('Dados inválidos para atualizar o pedido.', 'warning');
@@ -3889,10 +3973,10 @@ function bindAdminEvents() {
 
           try {
             if (appState.firebaseMode) {
-              await window.firebase.firestore().collection('orders').doc(orderId).update({ type, pricePerKg, deadline, status });
+              await window.firebase.firestore().collection('orders').doc(orderId).update({ type, pricePerKg, freightCost, freightType, deadline, status });
               await loadFirebaseData(appState.user.uid);
             } else {
-              appState.orders = appState.orders.map((o) => o.id === orderId ? { ...o, type, pricePerKg, deadline, status } : o);
+              appState.orders = appState.orders.map((o) => o.id === orderId ? { ...o, type, pricePerKg, freightCost, freightType, deadline, status } : o);
               saveLocalData();
             }
             showToast('Pedido atualizado!');
