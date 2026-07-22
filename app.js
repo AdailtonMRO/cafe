@@ -691,7 +691,8 @@ function render() {
           <button id="exploreButton" type="button" class="primary">Explorar e Entrar</button>
         </div>
         <div class="hero-visual">
-          <img src="assets/coffee-hero.svg" alt="Ilustração de uma xícara e grãos de café" />
+          <img src="assets/coffee-plantation.png" alt="Plantação de café especial nas montanhas ao amanhecer" />
+          <span class="hero-image-badge">Terroir & Origem</span>
         </div>
         <div class="hero-panel">
           <div class="metric">
@@ -719,9 +720,16 @@ function render() {
             <div class="news-grid">
               ${coffeeNews.map((story) => `
                 <article class="news-card">
-                  <span class="news-tag">${story.category}</span>
-                  <strong>${story.title}</strong>
-                  <p>${story.blurb}</p>
+                  ${story.image ? `
+                    <div class="news-card-image">
+                      <img src="${story.image}" alt="${story.title}" loading="lazy" />
+                    </div>
+                  ` : ''}
+                  <div class="news-card-body">
+                    <span class="news-tag">${story.category}</span>
+                    <strong>${story.title}</strong>
+                    <p>${story.blurb}</p>
+                  </div>
                 </article>
               `).join('')}
             </div>
