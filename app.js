@@ -2571,31 +2571,49 @@ function bindSuperAdminEvents() {
   document.querySelectorAll('.delete-user-super-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const userUid = btn.getAttribute('data-user-uid');
-      const user = appState.superUsers.find(u => u.uid === userUid);
-      if (!user) return;
+      const user = appState.superUsers.find(u => (u.uid === userUid || u.id === userUid));
+      if (!user) {
+        showToast('Usuário não encontrado.', 'error');
+        return;
+      }
 
       showModal({
-        title: 'Remover Usuário do Sistema?',
+        title: '⚠️ Confirmar Exclusão de Usuário',
         bodyHtml: `
-          <p>Deseja mesmo excluir o perfil de <strong>${user.name}</strong> (${user.email})?</p>
+          <p>Você está prestes a excluir permanentemente o perfil do usuário:</p>
+          <div style="background:rgba(255,255,255,0.04); padding:0.75rem; border-radius:6px; margin:0.75rem 0;">
+            <strong>${user.name}</strong><br>
+            <small style="color:var(--muted)">${user.email} | ${user.role === 'admin' ? 'Líder' : user.role === 'supplier' ? 'Fornecedor' : 'Membro'}</small>
+          </div>
           <p style="color:var(--error); font-size:0.8rem; margin-top:0.5rem">
-            Nota: Isso removerá o documento de usuário no Firestore.
+            Atenção: Esta ação é irreversível e removerá o cadastro do usuário no sistema.
           </p>
+          <div style="margin-top:1rem; padding:0.75rem; background:rgba(239,68,68,0.1); border:1px solid var(--error); border-radius:6px;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:0.5rem; color:var(--error); font-size:0.85rem; font-weight:600;">
+              <input type="checkbox" id="confirmUserDeletionCheck" style="width:auto; margin:0;" />
+              Confirmo a exclusão permanente deste usuário
+            </label>
+          </div>
         `,
-        confirmText: 'Remover Usuário',
-        onConfirm: async () => {
+        confirmText: 'Excluir Usuário',
+        onConfirm: async (modalEl) => {
+          const isChecked = modalEl.querySelector('#confirmUserDeletionCheck')?.checked;
+          if (!isChecked) {
+            showToast('Por favor, marque a caixa de confirmação para excluir.', 'warning');
+            return false;
+          }
+
           try {
             if (appState.firebaseMode) {
               await db.collection('users').doc(userUid).delete();
+              await loadSuperAdminData();
             } else {
-              appState.superUsers = appState.superUsers.filter(u => u.uid !== userUid);
+              appState.superUsers = appState.superUsers.filter(u => (u.uid !== userUid && u.id !== userUid));
+              localStorage.setItem('cafe-local-users', JSON.stringify(appState.superUsers));
               saveLocalData();
             }
 
-            showToast('Usuário removido!');
-            if (appState.firebaseMode) {
-              await loadFirebaseData(appState.user.uid);
-            }
+            showToast(`Usuário ${user.name} removido com sucesso!`);
             render();
             return true;
           } catch (error) {
@@ -2880,31 +2898,49 @@ function bindSuperAdminEvents() {
     btn.addEventListener('click', () => {
       const sId = btn.getAttribute('data-supplier-id');
       const supplier = appState.superUsers.find(u => (u.uid === sId || u.id === sId));
-      if (!supplier) return;
+      if (!supplier) {
+        showToast('Fornecedor não encontrado.', 'error');
+        return;
+      }
 
       showModal({
-        title: 'Excluir Fornecedor Parceiro?',
+        title: '⚠️ Confirmar Exclusão de Fornecedor',
         bodyHtml: `
-          <p>Você tem certeza que deseja excluir o fornecedor <strong>${supplier.name}</strong> (${supplier.email})?</p>
+          <p>Você tem certeza que deseja excluir o fornecedor parceiro:</p>
+          <div style="background:rgba(255,255,255,0.04); padding:0.75rem; border-radius:6px; margin:0.75rem 0;">
+            <strong>${supplier.name}</strong><br>
+            <small style="color:var(--muted)">${supplier.email} ${supplier.document ? `| CNPJ: ${supplier.document}` : ''}</small>
+          </div>
           <p style="color:var(--error); font-size:0.8rem; margin-top:0.5rem">
-            Aviso: Esta ação removerá o perfil do fornecedor e desativará suas ofertas associadas.
+            Aviso: Esta ação removerá o perfil do fornecedor e desativará todas as suas ofertas de café associadas.
           </p>
+          <div style="margin-top:1rem; padding:0.75rem; background:rgba(239,68,68,0.1); border:1px solid var(--error); border-radius:6px;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:0.5rem; color:var(--error); font-size:0.85rem; font-weight:600;">
+              <input type="checkbox" id="confirmSupplierDeletionCheck" style="width:auto; margin:0;" />
+              Confirmo a exclusão permanente deste fornecedor
+            </label>
+          </div>
         `,
         confirmText: 'Excluir Fornecedor',
-        onConfirm: async () => {
+        onConfirm: async (modalEl) => {
+          const isChecked = modalEl.querySelector('#confirmSupplierDeletionCheck')?.checked;
+          if (!isChecked) {
+            showToast('Por favor, marque a caixa de confirmação para excluir.', 'warning');
+            return false;
+          }
+
           try {
             if (appState.firebaseMode) {
               await db.collection('users').doc(sId).delete();
+              await loadSuperAdminData();
             } else {
               appState.superUsers = appState.superUsers.filter(u => (u.uid !== sId && u.id !== sId));
               appState.products = appState.products.filter(p => p.supplierId !== sId);
+              localStorage.setItem('cafe-local-users', JSON.stringify(appState.superUsers));
               saveLocalData();
             }
 
-            showToast('Fornecedor removido com sucesso!');
-            if (appState.firebaseMode) {
-              await loadSuperAdminData();
-            }
+            showToast(`Fornecedor ${supplier.name} removido com sucesso!`);
             render();
             return true;
           } catch (error) {
