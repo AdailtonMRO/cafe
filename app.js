@@ -949,18 +949,31 @@ function renderPlatformAdminToggle() {
 function renderRoleSwitcherNav() {
   const current = appState.activeRoleView || 'auto';
   const role = appState.profile?.role || 'user';
-  const isLeader = role === 'admin';
+  const isLeader = role === 'admin' || isPlatformAdmin();
   const isSupplier = role === 'supplier';
+
+  // Se for membro comum, não precisa alternar perfis (vê apenas Participante)
+  if (!isLeader && !isSupplier) {
+    return `
+      <nav class="role-switcher-container" aria-label="Navegação por perfil">
+        <button type="button" class="role-tab active" data-role-view="buyer">
+          🛒 Visão Participante (Comprador)
+        </button>
+      </nav>
+    `;
+  }
 
   return `
     <nav class="role-switcher-container" aria-label="Navegação por perfil">
-      <button type="button" class="role-tab ${current === 'auto' || current === 'buyer' ? 'active' : ''}" data-role-view="buyer">
-        🛒 Visão Participante (Comprador)
+      ${isLeader ? `
+        <button type="button" class="role-tab ${(current === 'leader' || current === 'auto') ? 'active' : ''}" data-role-view="leader">
+          📋 Visão Líder do Grupo
+        </button>
+      ` : ''}
+      <button type="button" class="role-tab ${current === 'buyer' || (!isLeader && current === 'auto') ? 'active' : ''}" data-role-view="buyer">
+        🛒 Visão Participante
       </button>
-      <button type="button" class="role-tab ${current === 'leader' || (current === 'auto' && isLeader) ? 'active' : ''}" data-role-view="leader">
-        📋 Visão Líder do Grupo
-      </button>
-      <button type="button" class="role-tab ${current === 'supplier' || (current === 'auto' && isSupplier) ? 'active' : ''}" data-role-view="supplier">
+      <button type="button" class="role-tab ${(current === 'supplier' || (!isLeader && isSupplier && current === 'auto')) ? 'active' : ''}" data-role-view="supplier">
         🚚 Visão Fornecedor & Torra
       </button>
     </nav>
@@ -1177,62 +1190,77 @@ function bindPromoCarouselEvents() {
 }
 
 function renderBaristaAiWidget() {
+  const isOpen = Boolean(appState.baristaAiOpen);
   const history = appState.baristaChatHistory || [];
   const apiKeySet = Boolean(getStoredApiKey());
 
   return `
-    <section class="ai-barista-card">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
-        <div style="display:flex; align-items:center; gap:0.5rem;">
-          <span class="ai-badge">✨ Barista AI (Gemini 3.6 Flash)</span>
-          <span style="font-size:0.75rem; color:var(--success); font-weight:600;">Free Tier (Grátis)</span>
-        </div>
-        <button id="configureApiKeyBtn" class="secondary" style="font-size:0.75rem; padding:0.25rem 0.6rem;">
-          ⚙️ Key: ${apiKeySet ? 'Configurada ✓' : 'Adicionar Key'}
-        </button>
-      </div>
-
-      <h3 style="font-family:'Playfair Display', serif; font-size:1.2rem; color:var(--accent-strong); margin-bottom:0.35rem;">
-        Assistente de Extração & Sommelier de Café
-      </h3>
-      <p style="font-size:0.82rem; color:var(--muted); margin-bottom:0.75rem;">
-        Pergunte sobre receitas na V60, Aeropress, Prensa Francesa, moagens ou como harmonizar seus cafés especiais.
-      </p>
-
-      <div style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.85rem;">
-        <button class="secondary ai-preset-btn" data-preset="Qual a moagem recomendada para filtro V60 e proporção de água?" style="font-size:0.72rem; padding:0.25rem 0.5rem;">☕ Receita V60</button>
-        <button class="secondary ai-preset-btn" data-preset="Como evitar que o café fique muito amargo ou ácido?" style="font-size:0.72rem; padding:0.25rem 0.5rem;">🎯 Ajuste de Sabor</button>
-        <button class="secondary ai-preset-btn" data-preset="Quais métodos de preparo destacam notas frutadas e florais?" style="font-size:0.72rem; padding:0.25rem 0.5rem;">💡 Notas Frutadas</button>
-      </div>
-
-      <div class="ai-chat-window">
-        <div id="aiChatMessages" class="ai-chat-messages">
-          ${history.length === 0 ? `
-            <div class="ai-message barista">
-              <div class="ai-avatar">☕</div>
-              <div class="ai-message-body">
-                Olá! Sou seu <strong>Barista AI</strong>. Como posso te ajudar a extrair o melhor sabor do seu café hoje?
-              </div>
+    <div class="barista-fab-container">
+      ${isOpen ? `
+        <div class="barista-floating-modal">
+          <div class="barista-floating-header">
+            <h4>☕ Barista IA Specialist</h4>
+            <div style="display:flex; align-items:center; gap:0.4rem;">
+              <button id="configureApiKeyBtn" class="secondary" style="font-size:0.7rem; padding:0.2rem 0.5rem;">
+                ⚙️ ${apiKeySet ? 'Key ✓' : '+ Key'}
+              </button>
+              <button type="button" class="barista-floating-close" id="closeBaristaFab">&times;</button>
             </div>
-          ` : history.map(msg => `
-            <div class="ai-message ${msg.sender}">
-              <div class="ai-avatar">${msg.sender === 'barista' ? '☕' : '👤'}</div>
-              <div class="ai-message-body">
-                ${msg.text.replace(/\n/g, '<br>')}
-              </div>
+          </div>
+
+          <div style="padding:0.5rem 0.75rem; background:rgba(255,255,255,0.02); border-bottom:1px solid var(--border); display:flex; gap:0.3rem; overflow-x:auto;">
+            <button class="secondary ai-preset-btn" data-preset="Qual a moagem recomendada para filtro V60?" style="font-size:0.7rem; padding:0.2rem 0.45rem; white-space:nowrap;">☕ Receita V60</button>
+            <button class="secondary ai-preset-btn" data-preset="Como evitar que o café fique muito amargo?" style="font-size:0.7rem; padding:0.2rem 0.45rem; white-space:nowrap;">🎯 Ajuste Sabor</button>
+            <button class="secondary ai-preset-btn" data-preset="Quais métodos destacam notas florais?" style="font-size:0.7rem; padding:0.2rem 0.45rem; white-space:nowrap;">💡 Florais</button>
+          </div>
+
+          <div class="ai-chat-window" style="flex:1; display:flex; flex-direction:column; min-height:0; border-radius:0; border:none;">
+            <div id="aiChatMessages" class="ai-chat-messages" style="flex:1; overflow-y:auto; padding:0.85rem;">
+              ${history.length === 0 ? `
+                <div class="ai-message barista">
+                  <div class="ai-avatar">☕</div>
+                  <div class="ai-message-body">
+                    Olá! Sou seu <strong>Barista AI</strong>. Como posso te ajudar a extrair o melhor sabor do seu café hoje?
+                  </div>
+                </div>
+              ` : history.map(msg => `
+                <div class="ai-message ${msg.sender}">
+                  <div class="ai-avatar">${msg.sender === 'barista' ? '☕' : '👤'}</div>
+                  <div class="ai-message-body">
+                    ${msg.text.replace(/\n/g, '<br>')}
+                  </div>
+                </div>
+              `).join('')}
             </div>
-          `).join('')}
+
+            <form id="aiChatForm" class="ai-chat-input-bar" style="padding:0.75rem;">
+              <input type="text" id="aiChatInput" placeholder="Pergunte ao Barista AI..." required />
+              <button type="submit" class="btn-ai" style="padding:0.4rem 0.85rem; font-size:0.8rem;">Enviar</button>
+            </form>
+          </div>
         </div>
-        <form id="aiChatForm" class="ai-chat-input-bar">
-          <input type="text" id="aiChatInput" placeholder="Faça uma pergunta ao Barista AI..." required />
-          <button type="submit" class="btn-ai" style="padding:0.4rem 0.9rem; font-size:0.8rem;">Enviar</button>
-        </form>
-      </div>
-    </section>
+      ` : ''}
+
+      <button type="button" class="barista-fab" id="toggleBaristaFab">
+        <span>☕ Conversar com Barista IA</span>
+      </button>
+    </div>
   `;
 }
 
 function bindBaristaAiEvents() {
+  document.getElementById('toggleBaristaFab')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    appState.baristaAiOpen = !appState.baristaAiOpen;
+    render();
+  });
+
+  document.getElementById('closeBaristaFab')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    appState.baristaAiOpen = false;
+    render();
+  });
+
   const form = document.getElementById('aiChatForm');
   const input = document.getElementById('aiChatInput');
   const configBtn = document.getElementById('configureApiKeyBtn');
@@ -1255,7 +1283,7 @@ function bindBaristaAiEvents() {
       onConfirm: () => {
         const val = document.getElementById('geminiApiKeyInput')?.value;
         setStoredApiKey(val);
-        showToast('Chave da API Gemini salva!');
+        showToast('Chave API Gemini salva com sucesso!');
         render();
       }
     });
@@ -1263,19 +1291,22 @@ function bindBaristaAiEvents() {
 
   document.querySelectorAll('.ai-preset-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      const text = btn.getAttribute('data-preset');
       if (input) {
-        input.value = btn.getAttribute('data-preset') || '';
-        form?.dispatchEvent(new Event('submit'));
+        input.value = text;
+        form?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
       }
     });
   });
 
-  form?.addEventListener('submit', async (e) => {
+  if (!form) return;
+
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = input.value.trim();
     if (!text) return;
 
-    if (!appState.baristaChatHistory) appState.baristaChatHistory = [];
+    // User message
     appState.baristaChatHistory.push({ sender: 'user', text });
     input.value = '';
 
@@ -1324,63 +1355,37 @@ function render() {
         ${renderConnectionBadge()}
       </header>
 
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Café & comunidade</p>
-          <h1>Descubra um universo de aromas, histórias e encontros.</h1>
-          <p>Monte sua compra coletiva de café com uma experiência visual inspirada no universo do café especial, acompanhada de notícias curtas para mergulhar no mundo do grão.</p>
-          <div class="hero-highlights">
-            <span class="pill">Café especial</span>
-            <span class="pill">Torra artesanal</span>
-            <span class="pill">Comunidade</span>
-          </div>
-          <button id="exploreButton" type="button" class="primary">Explorar e Entrar</button>
-        </div>
-        <div class="hero-visual">
-          <img src="assets/coffee-hero.svg" alt="Ilustração de uma xícara e grãos de café" />
-        </div>
-        <div class="hero-panel">
-          <div class="metric">
-            <span>Notícia em destaque</span>
-            <strong>${featuredStory.category}</strong>
-          </div>
-          <div>
-            <h3>${featuredStory.title}</h3>
-            <p>${featuredStory.blurb}</p>
-          </div>
-          <div class="metric">
-            <span>Experiência</span>
-            <strong>${featuredStory.accent}</strong>
-          </div>
-        </div>
-      </section>
-
-      <div class="dashboard-grid">
-        <div style="display:flex; flex-direction:column; gap:1.5rem">
-          ${renderPromotionsCarousel()}
-          ${renderBaristaAiWidget()}
-          <section class="card">
-            <div class="section-title">
-              <h2>Novidades do café</h2>
+      <div class="hero-auth-layout">
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Café & comunidade</p>
+            <h1>Descubra um universo de aromas, histórias e encontros.</h1>
+            <p>Monte sua compra coletiva de café com uma experiência visual inspirada no universo do café especial, acompanhada de notícias curtas para mergulhar no mundo do grão.</p>
+            <div class="hero-highlights">
+              <span class="pill">Café especial</span>
+              <span class="pill">Torra artesanal</span>
+              <span class="pill">Comunidade</span>
             </div>
-            <div class="news-grid">
-              ${coffeeNews.map((story) => `
-                <article class="news-card">
-                  ${story.image ? `
-                    <div class="news-card-image">
-                      <img src="${story.image}" alt="${story.title}" loading="lazy" />
-                    </div>
-                  ` : ''}
-                  <div class="news-card-body">
-                    <span class="news-tag">${story.category}</span>
-                    <strong>${story.title}</strong>
-                    <p>${story.blurb}</p>
-                  </div>
-                </article>
-              `).join('')}
+            <button id="exploreButton" type="button" class="primary">Explorar e Entrar</button>
+          </div>
+          <div class="hero-visual">
+            <img src="assets/coffee-hero.svg" alt="Ilustração de uma xícara e grãos de café" />
+          </div>
+          <div class="hero-panel">
+            <div class="metric">
+              <span>Notícia em destaque</span>
+              <strong>${featuredStory.category}</strong>
             </div>
-          </section>
-        </div>
+            <div>
+              <h3>${featuredStory.title}</h3>
+              <p>${featuredStory.blurb}</p>
+            </div>
+            <div class="metric">
+              <span>Experiência</span>
+              <strong>${featuredStory.accent}</strong>
+            </div>
+          </div>
+        </section>
 
         <section class="card auth-card" id="loginSection">
           <div class="auth-tabs">
@@ -1456,6 +1461,32 @@ function render() {
           `}
         </section>
       </div>
+
+      ${renderPromotionsCarousel()}
+
+      <section class="card" style="width:100%; margin-bottom:1.5rem;">
+        <div class="section-title">
+          <h2>Novidades do café</h2>
+        </div>
+        <div class="news-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+          ${coffeeNews.map((story) => `
+            <article class="news-card">
+              ${story.image ? `
+                <div class="news-card-image">
+                  <img src="${story.image}" alt="${story.title}" loading="lazy" />
+                </div>
+              ` : ''}
+              <div class="news-card-body">
+                <span class="news-tag">${story.category}</span>
+                <strong>${story.title}</strong>
+                <p>${story.blurb}</p>
+              </div>
+            </article>
+          `).join('')}
+        </div>
+      </section>
+
+      ${renderBaristaAiWidget()}
     `;
 
     // Guest Event Bindings
