@@ -59,6 +59,118 @@ function calculateMemberFreightShare(order, participation, allOrderParticipation
   return 0;
 }
 
+function getOrderStatusLabel(status) {
+  switch (status) {
+    case 'aberto': return '1. Captação de Pedidos';
+    case 'processando_fornecedor': return '2. Pedido no Fornecedor';
+    case 'aguardando_pagamento': return '3. Cobrança de Cotas (Pix)';
+    case 'disponivel_retirada': return '4. Disponível para Retirada';
+    case 'concluido':
+    case 'fechado': return '5. Compra Concluída';
+    case 'cancelado': return 'Cancelado';
+    default: return (status || 'aberto').toUpperCase();
+  }
+}
+
+function renderOrderStepper(status) {
+  const steps = [
+    { key: 'aberto', label: 'Captação', num: '1' },
+    { key: 'processando_fornecedor', label: 'Fornecedor', num: '2' },
+    { key: 'aguardando_pagamento', label: 'Cobrança Pix', num: '3' },
+    { key: 'disponivel_retirada', label: 'Retirada', num: '4' },
+    { key: 'concluido', label: 'Concluído', num: '5' }
+  ];
+
+  const orderMap = {
+    'aberto': 1,
+    'processando_fornecedor': 2,
+    'aguardando_pagamento': 3,
+    'disponivel_retirada': 4,
+    'concluido': 5,
+    'fechado': 5
+  };
+
+  const currentIdx = orderMap[status] || 1;
+
+  return `
+    <div class="order-lifecycle-stepper">
+      ${steps.map((s, idx) => {
+        const stepNum = idx + 1;
+        const isCompleted = stepNum < currentIdx;
+        const isActive = stepNum === currentIdx;
+        const stateClass = isCompleted ? 'completed' : (isActive ? 'active' : '');
+        
+        return `
+          <div class="stepper-step ${stateClass}">
+            <div class="stepper-step-icon">${isCompleted ? '✓' : s.num}</div>
+            <span class="stepper-step-label">${s.label}</span>
+          </div>
+          ${idx < steps.length - 1 ? `<div class="stepper-divider ${isCompleted ? 'completed' : ''}"></div>` : ''}
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function generateSupplierReportText(order, orderParticipations) {
+  const groupName = appState.group?.name || 'Nosso Grupo de Café';
+  const totalKg = orderParticipations.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
+  const memberCount = orderParticipations.length;
+
+  const coffeeTotals = {};
+
+  if (order.coffees && Array.isArray(order.coffees) && order.coffees.length > 0) {
+    order.coffees.forEach(c => {
+      coffeeTotals[c.name] = { kg: 0, pricePerKg: Number(c.pricePerKg || 0) };
+    });
+  } else {
+    coffeeTotals[order.type] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0) };
+  }
+
+  orderParticipations.forEach(p => {
+    if (p.items && Array.isArray(p.items) && p.items.length > 0) {
+      p.items.forEach(item => {
+        const name = item.coffeeName || order.type;
+        if (!coffeeTotals[name]) {
+          coffeeTotals[name] = { kg: 0, pricePerKg: Number(item.pricePerKg || 0) };
+        }
+        coffeeTotals[name].kg += Number(item.quantityKg || 0);
+      });
+    } else {
+      const name = order.type;
+      if (!coffeeTotals[name]) {
+        coffeeTotals[name] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0) };
+      }
+      coffeeTotals[name].kg += Number(p.quantityKg || 0);
+    }
+  });
+
+  let grandTotalValue = 0;
+  let itemsListText = '';
+
+  Object.entries(coffeeTotals).forEach(([name, data]) => {
+    const itemVal = data.kg * data.pricePerKg;
+    grandTotalValue += itemVal;
+    itemsListText += `• ${name}: ${data.kg.toFixed(2)} kg (R$ ${data.pricePerKg.toFixed(2)}/kg) = R$ ${itemVal.toFixed(2)}\n`;
+  });
+
+  const nowStr = new Date().toLocaleDateString('pt-BR');
+
+  return `☕ *PEDIDO CONSOLIDADO PARA FORNECEDOR*
+----------------------------------------
+*Grupo:* ${groupName}
+*Compra Coletiva:* ${order.type}
+*Data:* ${nowStr}
+
+*ITENS SOLICITADOS:*
+${itemsListText}----------------------------------------
+*TOTAL EM QUILOS:* ${totalKg.toFixed(2)} kg
+*VALOR TOTAL ITENS:* R$ ${grandTotalValue.toFixed(2)}
+*TOTAL DE PARTICIPANTES:* ${memberCount} membro(s)
+----------------------------------------
+_Gerado via App Coffee Experience_`;
+}
+
 function isPlaceholder(value) {
   if (!value) return true;
   const normalized = String(value).trim();
@@ -3121,33 +3233,43 @@ function bindSuperAdminEvents() {
  * action buttons to create, edit, and manage orders.
  */
 function renderAdminOrdersSection() {
-  const openOrders = appState.orders.filter((o) => o.status === 'aberto');
-  const closedOrders = appState.orders.filter((o) => o.status !== 'aberto');
+  const isClosed = (s) => s === 'fechado' || s === 'concluido' || s === 'cancelado';
+  const openOrders = appState.orders.filter((o) => !isClosed(o.status));
+  const closedOrders = appState.orders.filter((o) => isClosed(o.status));
 
   const renderOrderCard = (order) => {
-    // Compute total kg requested by all participants for this order
     const orderParticipations = appState.participations.filter((p) => p.orderId === order.id);
     const totalKg = orderParticipations.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
     const totalValue = orderParticipations.reduce((sum, p) => sum + Number(p.valueTotal || 0), 0);
     const participantsCount = orderParticipations.length;
 
+    const currentStatus = order.status || 'aberto';
+    const statusLabel = getOrderStatusLabel(currentStatus);
+
     return `
-      <article class="order-item">
-        <div class="order-details" style="flex:1;">
-          <strong>${order.type}</strong>
-          <p>R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
-          <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
-            <span class="status-pill ${order.status}">${order.status.toUpperCase()}</span>
-            <span style="font-size:0.8rem; color:var(--muted);">${participantsCount} participante(s)</span>
-            <span style="font-size:0.8rem; color:var(--accent-strong); font-weight:700;">
-              📦 ${totalKg.toFixed(2)} kg &nbsp;|&nbsp; R$ ${totalValue.toFixed(2)}
-            </span>
+      <article class="order-item" style="flex-direction:column; align-items:stretch;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.5rem;">
+          <div class="order-details" style="flex:1;">
+            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+              <strong>${order.type}</strong>
+              <span class="status-pill ${currentStatus}">${statusLabel}</span>
+            </div>
+            <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
+              <span style="font-size:0.8rem; color:var(--muted);">${participantsCount} participante(s)</span>
+              <span style="font-size:0.8rem; color:var(--accent-strong); font-weight:700;">
+                📦 ${totalKg.toFixed(2)} kg &nbsp;|&nbsp; R$ ${totalValue.toFixed(2)}
+              </span>
+            </div>
+          </div>
+          <div class="actions" style="display:flex; flex-direction:row; flex-wrap:wrap; gap:0.4rem; align-items:center;">
+            <button class="generate-supplier-report-btn secondary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;" title="Gerar relatório de quilos para enviar ao fornecedor">📋 Relatório Fornecedor</button>
+            <button class="advance-stage-btn primary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;">Avançar Etapa ➔</button>
+            <button class="edit-order-btn secondary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;">Editar</button>
+            <button class="delete-order-btn danger" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem; border-radius:6px; cursor:pointer;">Excluir</button>
           </div>
         </div>
-        <div class="actions" style="display:flex; gap:0.4rem;">
-          <button class="edit-order-btn secondary" data-order-id="${order.id}" style="font-size:0.8rem; padding:0.5rem 1rem;">Editar</button>
-          <button class="delete-order-btn danger" data-order-id="${order.id}" style="font-size:0.8rem; padding:0.5rem 1rem; border-radius:6px; cursor:pointer;">Excluir</button>
-        </div>
+        ${renderOrderStepper(currentStatus)}
       </article>
     `;
   };
@@ -3155,20 +3277,20 @@ function renderAdminOrdersSection() {
   return `
     <section class="card">
       <div class="section-title">
-        <h2>Pedidos de Café</h2>
-        <button id="newOrderButton" class="primary">+ Novo Pedido</button>
+        <h2>Compras Coletivas (Líder)</h2>
+        <button id="newOrderButton" class="primary">+ Nova Compra Coletiva</button>
       </div>
       <div class="orders-container">
         ${openOrders.length === 0 ? `
           <p class="hint" style="color:var(--muted); font-size:0.9rem; text-align:center; padding:2rem 0;">
-            Nenhum pedido aberto. Clique em "+ Novo Pedido" para iniciar uma compra coletiva.
+            Nenhuma compra coletiva em andamento. Clique em "+ Nova Compra Coletiva" para iniciar o ciclo.
           </p>
         ` : openOrders.map(renderOrderCard).join('')}
       </div>
       ${closedOrders.length > 0 ? `
         <details style="margin-top:1.25rem;">
           <summary style="cursor:pointer; color:var(--muted); font-size:0.85rem; padding:0.5rem 0; border-top:1px solid var(--border);">
-            Ver pedidos encerrados (${closedOrders.length})
+            Ver histórico de compras concluídas/encerradas (${closedOrders.length})
           </summary>
           <div class="orders-container" style="margin-top:0.75rem;">
             ${closedOrders.map(renderOrderCard).join('')}
@@ -3179,11 +3301,9 @@ function renderAdminOrdersSection() {
   `;
 }
 
-/**
- * Member view: shows open orders they can join by entering a quantity in kg.
- */
 function renderUserOrdersSection() {
-  const openOrders = appState.orders.filter((o) => o.status === 'aberto');
+  const isClosed = (s) => s === 'fechado' || s === 'concluido' || s === 'cancelado';
+  const openOrders = appState.orders.filter((o) => !isClosed(o.status));
   const myUid = appState.user?.uid;
 
   const renderOrderCard = (order) => {
@@ -3201,38 +3321,41 @@ function renderUserOrdersSection() {
       freightBadge = `<span class="pill" style="font-size:0.7rem; background:rgba(212,144,62,0.15); color:var(--accent-strong);">🚚 Frete R$ ${freightCost.toFixed(2)} (${typeLabel})</span>`;
     }
 
+    const currentStatus = order.status || 'aberto';
+    const statusLabel = getOrderStatusLabel(currentStatus);
+
+    let mainActionHtml = '';
+
     if (myParticipation) {
       const coffeeVal = calculateTotal(myParticipation.quantityKg, order.pricePerKg);
       const freightVal = calculateMemberFreightShare(order, myParticipation, orderParticipations);
       const totalPayable = coffeeVal + freightVal;
 
-      return `
-        <article class="order-item order-item--joined">
-          <div class="order-details" style="flex:1;">
-            <strong>${order.type}</strong> ${freightBadge}
-            <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
-            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
-              <span class="status-pill pago" style="background:rgba(74,222,128,0.15);">✔ Você pediu ${Number(myParticipation.quantityKg).toFixed(2)} kg</span>
-              <span style="font-size:0.8rem; color:var(--muted);">Total do grupo: ${totalKg.toFixed(2)} kg</span>
-            </div>
-          </div>
-          <div class="actions" style="align-items:flex-end;">
-            <span style="color:var(--success); font-size:0.85rem; font-weight:700;">R$ ${totalPayable.toFixed(2)}</span>
-            ${freightVal > 0 ? `<small style="font-size:0.7rem; color:var(--muted); text-align:right;">(Café R$ ${coffeeVal.toFixed(2)} + Frete R$ ${freightVal.toFixed(2)})</small>` : ''}
-            <span class="status-pill ${myParticipation.paymentStatus}" style="font-size:0.7rem; margin-top:0.2rem;">${myParticipation.paymentStatus.toUpperCase()}</span>
-          </div>
-        </article>
-      `;
-    }
+      let pickupAction = '';
+      if (currentStatus === 'disponivel_retirada' || currentStatus === 'concluido') {
+        if (myParticipation.pickupStatus === 'recebido') {
+          pickupAction = `<span class="status-pill recebido" style="margin-top:0.4rem; font-size:0.75rem;">✔ Encomenda Retirada</span>`;
+        } else {
+          pickupAction = `
+            <button class="confirm-pickup-btn primary" data-part-id="${myParticipation.id}" style="margin-top:0.4rem; padding:0.45rem 0.8rem; font-size:0.75rem; border-radius:6px;">
+              ✔ Confirmar que já retirei meu café
+            </button>
+          `;
+        }
+      }
 
-    // Not yet participating — show join form
-    return `
-      <article class="order-item order-item--available">
-        <div class="order-details" style="flex:1;">
-          <strong>${order.type}</strong> ${freightBadge}
-          <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
-          <p style="font-size:0.8rem; color:var(--muted); margin-top:0.2rem;">Grupo já solicitou: ${totalKg.toFixed(2)} kg</p>
+      mainActionHtml = `
+        <div class="actions" style="align-items:flex-end;">
+          <span style="color:var(--success); font-size:0.9rem; font-weight:700;">R$ ${totalPayable.toFixed(2)}</span>
+          ${freightVal > 0 ? `<small style="font-size:0.7rem; color:var(--muted); text-align:right;">(Café R$ ${coffeeVal.toFixed(2)} + Frete R$ ${freightVal.toFixed(2)})</small>` : ''}
+          <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin-top:0.2rem;">
+            <span class="status-pill ${myParticipation.paymentStatus}" style="font-size:0.7rem;">Pagamento: ${myParticipation.paymentStatus.toUpperCase()}</span>
+          </div>
+          ${pickupAction}
         </div>
+      `;
+    } else if (currentStatus === 'aberto') {
+      mainActionHtml = `
         <div class="actions" style="min-width:210px;">
           <form class="join-order-form" data-order-id="${order.id}" data-price="${order.pricePerKg}" style="display:grid; grid-template-columns:1fr auto; gap:0.5rem; margin:0; align-items:end;">
             <div class="form-group" style="margin:0;">
@@ -3250,6 +3373,32 @@ function renderUserOrdersSection() {
             <button type="submit" class="primary" style="padding:0.55rem 0.9rem; font-size:0.8rem; border-radius:8px; margin-bottom:0; height:fit-content; align-self:end;">Participar</button>
           </form>
         </div>
+      `;
+    } else {
+      mainActionHtml = `
+        <div class="actions" style="align-items:flex-end;">
+          <span style="font-size:0.8rem; color:var(--muted);">Solicitações Encerradas</span>
+        </div>
+      `;
+    }
+
+    return `
+      <article class="order-item ${myParticipation ? 'order-item--joined' : 'order-item--available'}" style="flex-direction:column; align-items:stretch;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.5rem;">
+          <div class="order-details" style="flex:1;">
+            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+              <strong>${order.type}</strong> ${freightBadge}
+              <span class="status-pill ${currentStatus}">${statusLabel}</span>
+            </div>
+            <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
+              ${myParticipation ? `<span class="status-pill pago" style="background:rgba(74,222,128,0.15);">✔ Você pediu ${Number(myParticipation.quantityKg).toFixed(2)} kg</span>` : ''}
+              <span style="font-size:0.8rem; color:var(--muted);">Total do grupo: ${totalKg.toFixed(2)} kg</span>
+            </div>
+          </div>
+          ${mainActionHtml}
+        </div>
+        ${renderOrderStepper(currentStatus)}
       </article>
     `;
   };
@@ -3257,10 +3406,17 @@ function renderUserOrdersSection() {
   return `
     <section class="card">
       <div class="section-title">
-        <h2>Compras Disponíveis</h2>
-        <span style="font-size:0.8rem; color:var(--muted);">${openOrders.length} pedido(s) aberto(s)</span>
+        <h2>Compras Coletivas do Grupo</h2>
+        <span style="font-size:0.8rem; color:var(--muted);">${openOrders.length} compra(s) ativa(s)</span>
       </div>
       <div class="orders-container">
+        ${openOrders.length === 0 ? `
+          <p class="hint" style="color:var(--muted); font-size:0.9rem; text-align:center; padding:2rem 0;">
+            Nenhuma compra coletiva em andamento no momento. Aguarde o líder abrir uma nova rodada.
+          </p>
+        ` : openOrders.map(renderOrderCard).join('')}
+      </div>
+    </section>
         ${openOrders.length === 0 ? `
           <p class="hint" style="color:var(--muted); font-size:0.9rem; text-align:center; padding:2rem 0;">
             Nenhum pedido aberto no momento. Aguarde o administrador do grupo lançar uma nova compra.
@@ -3727,10 +3883,126 @@ function bindUserEvents() {
       });
     });
   });
+
+  // Confirm pickup of coffee by user
+  document.querySelectorAll('.confirm-pickup-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pId = btn.getAttribute('data-part-id');
+      if (!pId) return;
+
+      try {
+        if (appState.firebaseMode) {
+          const db = window.firebase.firestore();
+          await db.collection('participations').doc(pId).update({
+            pickupStatus: 'recebido'
+          });
+          await loadFirebaseData(appState.user.uid);
+        } else {
+          appState.participations = appState.participations.map((p) =>
+            p.id === pId ? { ...p, pickupStatus: 'recebido' } : p
+          );
+          saveLocalData();
+        }
+        showToast('Retirada confirmada com sucesso! Aproveite seu café! ☕');
+        render();
+      } catch (err) {
+        showToast(`Erro ao confirmar retirada: ${err.message}`, 'error');
+      }
+    });
+  });
 }
 
 // BIND GROUP ADMIN EVENTS
 function bindAdminEvents() {
+  // Generate consolidated supplier report in 1 click
+  document.querySelectorAll('.generate-supplier-report-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const orderId = btn.getAttribute('data-order-id');
+      const order = appState.orders.find((o) => o.id === orderId);
+      if (!order) return;
+
+      const orderParticipations = appState.participations.filter((p) => p.orderId === orderId);
+      const reportText = generateSupplierReportText(order, orderParticipations);
+
+      showModal({
+        title: '📋 Relatório Consolidado para Fornecedor',
+        bodyHtml: `
+          <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;">
+            Este relatório consolida todas as cotas do grupo em quilos para envio ao fornecedor via WhatsApp ou E-mail.
+          </p>
+          <div class="supplier-report-box" id="supplierReportTextContainer">${reportText}</div>
+        `,
+        confirmText: 'Copiar p/ WhatsApp',
+        cancelText: 'Fechar',
+        onConfirm: async () => {
+          try {
+            await navigator.clipboard.writeText(reportText);
+            showToast('Relatório copiado para a área de transferência! Cole no WhatsApp do fornecedor.');
+            return true;
+          } catch (err) {
+            showToast('Erro ao copiar relatório.', 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
+
+  // Fast advance cycle stage
+  document.querySelectorAll('.advance-stage-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const orderId = btn.getAttribute('data-order-id');
+      const order = appState.orders.find((o) => o.id === orderId);
+      if (!order) return;
+
+      const stages = [
+        { key: 'aberto', label: '1. Captação (Aberto para solicitações)' },
+        { key: 'processando_fornecedor', label: '2. Enviar Pedido ao Fornecedor' },
+        { key: 'aguardando_pagamento', label: '3. Abrir Cobrança de Cotas (Pix)' },
+        { key: 'disponivel_retirada', label: '4. Encomenda Chegou (Disponível para Retirada)' },
+        { key: 'concluido', label: '5. Finalizar Compra Coletiva (Concluído)' }
+      ];
+
+      showModal({
+        title: 'Avançar Estágio da Compra Coletiva',
+        bodyHtml: `
+          <form id="modalAdvanceStageForm" style="margin-top:0;">
+            <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">
+              Selecione o novo estágio do ciclo de vida para a compra <strong>${order.type}</strong>:
+            </p>
+            <div class="form-group">
+              <label for="selectNewStage">Estágio da Compra</label>
+              <select id="selectNewStage" style="padding:0.6rem; font-size:0.85rem;">
+                ${stages.map(s => `
+                  <option value="${s.key}" ${order.status === s.key ? 'selected' : ''}>${s.label}</option>
+                `).join('')}
+              </select>
+            </div>
+          </form>
+        `,
+        confirmText: 'Atualizar Estágio',
+        onConfirm: async (modalEl) => {
+          const newStatus = modalEl.querySelector('#selectNewStage').value;
+          try {
+            if (appState.firebaseMode) {
+              await window.firebase.firestore().collection('orders').doc(orderId).update({ status: newStatus });
+              await loadFirebaseData(appState.user.uid);
+            } else {
+              appState.orders = appState.orders.map((o) => o.id === orderId ? { ...o, status: newStatus } : o);
+              saveLocalData();
+            }
+            showToast(`Estágio da compra atualizado para: ${getOrderStatusLabel(newStatus)}`);
+            render();
+            return true;
+          } catch (err) {
+            showToast(`Erro ao alterar estágio: ${err.message}`, 'error');
+            return false;
+          }
+        }
+      });
+    });
+  });
+
   document.getElementById('groupSettingsBtn')?.addEventListener('click', () => {
     if (!appState.group) return;
 
@@ -3948,10 +4220,13 @@ function bindAdminEvents() {
               <input type="date" id="editDeadline" value="${order.deadline}" required />
             </div>
             <div class="form-group">
-              <label for="editStatus">Status da Compra</label>
+              <label for="editStatus">Status da Compra (Estágio)</label>
               <select id="editStatus" required>
-                <option value="aberto" ${order.status === 'aberto' ? 'selected' : ''}>Aberto</option>
-                <option value="fechado" ${order.status === 'fechado' ? 'selected' : ''}>Fechado</option>
+                <option value="aberto" ${order.status === 'aberto' ? 'selected' : ''}>1. Captação de Pedidos (Aberto)</option>
+                <option value="processando_fornecedor" ${order.status === 'processando_fornecedor' ? 'selected' : ''}>2. Pedido no Fornecedor</option>
+                <option value="aguardando_pagamento" ${order.status === 'aguardando_pagamento' ? 'selected' : ''}>3. Cobrança de Cotas (Pix)</option>
+                <option value="disponivel_retirada" ${order.status === 'disponivel_retirada' ? 'selected' : ''}>4. Disponível para Retirada</option>
+                <option value="concluido" ${order.status === 'concluido' || order.status === 'fechado' ? 'selected' : ''}>5. Concluído</option>
                 <option value="cancelado" ${order.status === 'cancelado' ? 'selected' : ''}>Cancelado</option>
               </select>
             </div>
