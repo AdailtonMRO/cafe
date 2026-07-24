@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coffee-experience-cache-v6';
+const CACHE_NAME = 'coffee-experience-cache-v7';
 const ASSETS = [
   './index.html',
   './styles.css',

@@ -1246,6 +1246,25 @@ button.danger:hover {
     font-size: 0.78rem;
   }
 
+  /* Standardize all cards to 100% equal width on mobile */
+  .card, 
+  .hero, 
+  .goal-card, 
+  .ai-barista-card, 
+  .auth-card, 
+  .news-card, 
+  .tech-card, 
+  .sensory-card, 
+  .metric-card, 
+  .order-item,
+  .role-switcher-container {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+
   /* Role Switcher & New Components on Mobile */
   .role-switcher-container {
     overflow-x: auto;
@@ -1258,10 +1277,12 @@ button.danger:hover {
     font-size: 0.76rem;
     white-space: nowrap;
     min-height: 44px;
+    flex: 1;
   }
   .sensory-card-grid {
     grid-template-columns: 1fr;
     gap: 1rem;
+    width: 100%;
   }
   .sensory-card {
     padding: 1.15rem;
@@ -1296,6 +1317,8 @@ button.danger:hover {
     border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
+    width: 100%;
+    max-width: 100%;
   }
   .modal-header {
     padding: 1rem 1.15rem;
