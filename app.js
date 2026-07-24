@@ -114,6 +114,7 @@ function renderOrderStepper(status) {
 
 function generateSupplierReportText(order, orderParticipations) {
   const groupName = appState.group?.name || 'Nosso Grupo de Café';
+  const orderTitle = order.title || order.type || 'Compra Coletiva';
   const totalKg = orderParticipations.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
   const memberCount = orderParticipations.length;
 
@@ -121,53 +122,72 @@ function generateSupplierReportText(order, orderParticipations) {
 
   if (order.coffees && Array.isArray(order.coffees) && order.coffees.length > 0) {
     order.coffees.forEach(c => {
-      coffeeTotals[c.name] = { kg: 0, pricePerKg: Number(c.pricePerKg || 0) };
+      coffeeTotals[c.name] = { kg: 0, pricePerKg: Number(c.pricePerKg || 0), requests: [] };
     });
   } else {
-    coffeeTotals[order.type] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0) };
+    coffeeTotals[order.type] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0), requests: [] };
   }
 
   orderParticipations.forEach(p => {
+    const uName = getUserName(p.userId) || p.userName || 'Membro';
+
     if (p.items && Array.isArray(p.items) && p.items.length > 0) {
       p.items.forEach(item => {
         const name = item.coffeeName || order.type;
         if (!coffeeTotals[name]) {
-          coffeeTotals[name] = { kg: 0, pricePerKg: Number(item.pricePerKg || 0) };
+          coffeeTotals[name] = { kg: 0, pricePerKg: Number(item.pricePerKg || 0), requests: [] };
         }
-        coffeeTotals[name].kg += Number(item.quantityKg || 0);
+        const itemKg = Number(item.quantityKg || 0);
+        coffeeTotals[name].kg += itemKg;
+        coffeeTotals[name].requests.push({ userName: uName, kg: itemKg });
       });
     } else {
       const name = order.type;
       if (!coffeeTotals[name]) {
-        coffeeTotals[name] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0) };
+        coffeeTotals[name] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0), requests: [] };
       }
-      coffeeTotals[name].kg += Number(p.quantityKg || 0);
+      const itemKg = Number(p.quantityKg || 0);
+      coffeeTotals[name].kg += itemKg;
+      coffeeTotals[name].requests.push({ userName: uName, kg: itemKg });
     }
   });
 
   let grandTotalValue = 0;
-  let itemsListText = '';
+  let coffeeDetailsText = '';
 
-  Object.entries(coffeeTotals).forEach(([name, data]) => {
+  Object.entries(coffeeTotals).forEach(([coffeeName, data]) => {
     const itemVal = data.kg * data.pricePerKg;
     grandTotalValue += itemVal;
-    itemsListText += `• ${name}: ${data.kg.toFixed(2)} kg (R$ ${data.pricePerKg.toFixed(2)}/kg) = R$ ${itemVal.toFixed(2)}\n`;
+
+    coffeeDetailsText += `\n☕ *${coffeeName.toUpperCase()}*\n`;
+    coffeeDetailsText += `• Valor Unitário: R$ ${data.pricePerKg.toFixed(2)}/kg\n`;
+    coffeeDetailsText += `• Total Solicitado: ${data.kg.toFixed(2)} kg (R$ ${itemVal.toFixed(2)})\n`;
+
+    if (data.requests.length > 0) {
+      coffeeDetailsText += `  📋 *Detalhamento por Membro:*\n`;
+      data.requests.forEach(req => {
+        coffeeDetailsText += `   - ${req.userName}: ${req.kg.toFixed(2)} kg\n`;
+      });
+    } else {
+      coffeeDetailsText += `  *(Nenhuma solicitação para este tipo)*\n`;
+    }
   });
 
   const nowStr = new Date().toLocaleDateString('pt-BR');
 
-  return `☕ *PEDIDO CONSOLIDADO PARA FORNECEDOR*
-----------------------------------------
+  return `📦 *RELATÓRIO ÚNICO PARA FORNECEDOR*
+========================================
 *Grupo:* ${groupName}
-*Compra Coletiva:* ${order.type}
-*Data:* ${nowStr}
-
-*ITENS SOLICITADOS:*
-${itemsListText}----------------------------------------
-*TOTAL EM QUILOS:* ${totalKg.toFixed(2)} kg
-*VALOR TOTAL ITENS:* R$ ${grandTotalValue.toFixed(2)}
-*TOTAL DE PARTICIPANTES:* ${memberCount} membro(s)
-----------------------------------------
+*Nome da Compra:* ${orderTitle}
+*Data do Relatório:* ${nowStr}
+========================================
+${coffeeDetailsText}
+========================================
+📊 *RESUMO GERAL CONSOLIDADO:*
+• Total de Participantes: ${memberCount} membro(s)
+• Volume Total Solicitado: ${totalKg.toFixed(2)} kg
+• Valor Total do Pedido: R$ ${grandTotalValue.toFixed(2)}
+========================================
 _Gerado via App Coffee Experience_`;
 }
 
@@ -3245,15 +3265,17 @@ function renderAdminOrdersSection() {
 
     const currentStatus = order.status || 'aberto';
     const statusLabel = getOrderStatusLabel(currentStatus);
+    const displayTitle = order.title || order.type || 'Compra Coletiva';
 
     return `
       <article class="order-item" style="flex-direction:column; align-items:stretch;">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.5rem;">
           <div class="order-details" style="flex:1;">
             <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-              <strong>${order.type}</strong>
+              <strong>${displayTitle}</strong>
               <span class="status-pill ${currentStatus}">${statusLabel}</span>
             </div>
+            ${order.title ? `<p style="font-size:0.85rem; color:var(--accent-strong); font-weight:600; margin-top:0.15rem;">☕ Café: ${order.type}</p>` : ''}
             <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
               <span style="font-size:0.8rem; color:var(--muted);">${participantsCount} participante(s)</span>
@@ -3382,14 +3404,17 @@ function renderUserOrdersSection() {
       `;
     }
 
+    const displayTitle = order.title || order.type || 'Compra Coletiva';
+
     return `
       <article class="order-item ${myParticipation ? 'order-item--joined' : 'order-item--available'}" style="flex-direction:column; align-items:stretch;">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.5rem;">
           <div class="order-details" style="flex:1;">
             <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-              <strong>${order.type}</strong> ${freightBadge}
+              <strong>${displayTitle}</strong> ${freightBadge}
               <span class="status-pill ${currentStatus}">${statusLabel}</span>
             </div>
+            ${order.title ? `<p style="font-size:0.85rem; color:var(--accent-strong); font-weight:600; margin-top:0.15rem;">☕ Café: ${order.type}</p>` : ''}
             <p style="margin-top:0.25rem;">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
               ${myParticipation ? `<span class="status-pill pago" style="background:rgba(74,222,128,0.15);">✔ Você pediu ${Number(myParticipation.quantityKg).toFixed(2)} kg</span>` : ''}
@@ -4069,6 +4094,10 @@ function bindAdminEvents() {
       bodyHtml: `
         <form id="modalCreateForm" style="margin-top:0;">
           <div class="form-group">
+            <label for="orderTitle">Nome / Identificação da Compra Coletiva</label>
+            <input type="text" id="orderTitle" placeholder="Ex: Compra Coletiva #15 - Lote de Primavera" required />
+          </div>
+          <div class="form-group">
             <label for="orderSourceProduct">Importar oferta de fornecedor parceiro (opcional)</label>
             <select id="orderSourceProduct" style="padding:0.5rem; font-size:0.85rem; border-radius:6px;">
               <option value="">-- Cadastrar Manualmente --</option>
@@ -4078,7 +4107,7 @@ function bindAdminEvents() {
             </select>
           </div>
           <div class="form-group">
-            <label for="orderType">Nome do Café / Produtor / Região</label>
+            <label for="orderType">Variedade do Café / Produtor / Região</label>
             <input type="text" id="orderType" placeholder="Ex: Catuaí Vermelho - Sítio São João" required />
           </div>
           <div class="form-group">
@@ -4107,7 +4136,6 @@ function bindAdminEvents() {
       `,
       confirmText: 'Lançar Pedido',
       onShow: (modalEl) => {
-        // Change listener to auto populate fields when a partner product is selected
         modalEl.querySelector('#orderSourceProduct')?.addEventListener('change', (e) => {
           const select = e.target;
           const selectedOption = select.options[select.selectedIndex];
@@ -4127,18 +4155,20 @@ function bindAdminEvents() {
         });
       },
       onConfirm: async (modalEl) => {
+        const title = modalEl.querySelector('#orderTitle').value.trim();
         const type = modalEl.querySelector('#orderType').value.trim();
         const pricePerKg = Number(modalEl.querySelector('#orderPrice').value);
         const deadline = modalEl.querySelector('#orderDeadline').value;
         const freightCost = Number(modalEl.querySelector('#orderFreightCost').value || 0);
         const freightType = modalEl.querySelector('#orderFreightType').value;
 
-        if (!type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
-          showToast('Preencha os dados de forma correta.', 'warning');
+        if (!title || !type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
+          showToast('Preencha os dados de forma correta (Nome, Café, Valor e Data Limite).', 'warning');
           return false;
         }
 
         const newOrder = {
+          title,
           type,
           pricePerKg,
           freightCost,
@@ -4155,14 +4185,12 @@ function bindAdminEvents() {
           if (appState.firebaseMode) {
             const db = window.firebase.firestore();
             await db.collection('orders').add(newOrder);
-            // Real-time listener onSnapshot will automatically trigger System Notification amigably
           } else {
-            // Local mode mockup - trigger notification directly for testing
             appState.orders.unshift({ id: crypto.randomUUID(), ...newOrder });
             saveLocalData();
             triggerSystemNotification(
-              `Novo Café no grupo ${appState.group.name}!`,
-              `${type} por R$ ${pricePerKg.toFixed(2)}/kg. Participe até ${deadline}!`
+              `Nova Compra Coletiva no grupo ${appState.group.name}!`,
+              `${title} (${type}) por R$ ${pricePerKg.toFixed(2)}/kg. Participe até ${deadline}!`
             );
           }
           showToast('Nova compra coletiva iniciada!');
@@ -4194,7 +4222,11 @@ function bindAdminEvents() {
         bodyHtml: `
           <form id="modalEditForm" style="margin-top:0;">
             <div class="form-group">
-              <label for="editType">Tipo de Café / Produtor</label>
+              <label for="editTitle">Nome / Identificação da Compra Coletiva</label>
+              <input type="text" id="editTitle" value="${order.title || order.type}" placeholder="Ex: Compra Coletiva #15 - Lote de Primavera" required />
+            </div>
+            <div class="form-group">
+              <label for="editType">Variedade do Café / Produtor</label>
               <input type="text" id="editType" value="${order.type}" required />
             </div>
             <div class="form-group">
@@ -4234,6 +4266,7 @@ function bindAdminEvents() {
         `,
         confirmText: 'Salvar Configurações',
         onConfirm: async (modalEl) => {
+          const title = modalEl.querySelector('#editTitle').value.trim();
           const type = modalEl.querySelector('#editType').value.trim();
           const pricePerKg = Number(modalEl.querySelector('#editPrice').value);
           const deadline = modalEl.querySelector('#editDeadline').value;
@@ -4241,20 +4274,20 @@ function bindAdminEvents() {
           const freightCost = Number(modalEl.querySelector('#editFreightCost').value || 0);
           const freightType = modalEl.querySelector('#editFreightType').value;
 
-          if (!type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
+          if (!title || !type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
             showToast('Dados inválidos para atualizar o pedido.', 'warning');
             return false;
           }
 
           try {
             if (appState.firebaseMode) {
-              await window.firebase.firestore().collection('orders').doc(orderId).update({ type, pricePerKg, freightCost, freightType, deadline, status });
+              await window.firebase.firestore().collection('orders').doc(orderId).update({ title, type, pricePerKg, freightCost, freightType, deadline, status });
               await loadFirebaseData(appState.user.uid);
             } else {
-              appState.orders = appState.orders.map((o) => o.id === orderId ? { ...o, type, pricePerKg, freightCost, freightType, deadline, status } : o);
+              appState.orders = appState.orders.map((o) => o.id === orderId ? { ...o, title, type, pricePerKg, freightCost, freightType, deadline, status } : o);
               saveLocalData();
             }
-            showToast('Pedido atualizado!');
+            showToast('Compra coletiva atualizada!');
             render();
             return true;
           } catch (err) {
