@@ -6,6 +6,12 @@
       "sourceType": "github",
       "skillPath": "skills/firebase-ai-logic-basics/SKILL.md",
       "computedHash": "aba2d689236a21ac7989286b88ecb3399d616b90f2dd8946e675466e57802c35"
+    },
+    "redesign-existing-projects": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/redesign-skill/SKILL.md",
+      "computedHash": "47eced3e960a2c961d3cbee11fa1216264f589344b586a5cbd03967cd6b9c54b"
     }
   }
 }

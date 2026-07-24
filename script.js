@@ -1,14 +1,21 @@
-const recommendations = [
-  'Sugestão do dia: um café coado com um toque de canela.',
-  'Sugestão do dia: um latte com leite vaporizado e um pouco de chocolate.',
-  'Sugestão do dia: um cold brew gelado para um descanso leve.',
-  'Sugestão do dia: um espresso curto e intenso para a manhã.'
-];
+import { generateDailyCoffeeTip } from './ai-service.js';
 
 const button = document.getElementById('recommendationButton');
 const tipText = document.getElementById('tipText');
 
-button.addEventListener('click', () => {
-  const randomIndex = Math.floor(Math.random() * recommendations.length);
-  tipText.textContent = recommendations[randomIndex];
-});
+if (button && tipText) {
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    tipText.style.opacity = '0.5';
+    tipText.textContent = 'Consultando o Barista AI...';
+
+    const result = await generateDailyCoffeeTip();
+
+    tipText.style.opacity = '1';
+    tipText.innerHTML = result.isAiGenerated
+      ? `✨ <strong>Dica da IA (Gemini):</strong> ${result.text}`
+      : `☕ <strong>Sugestão do dia:</strong> ${result.text}`;
+
+    button.disabled = false;
+  });
+}

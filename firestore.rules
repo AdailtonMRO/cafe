@@ -8,87 +8,100 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Helper: Get user's profile data
+    // Helper: Get user's profile data (cached via exists check)
     function getUserData() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Helper: Does the user profile document exist?
+    function userProfileExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     // Helper: Is the user a Platform Super Admin?
     function isSuperAdmin() {
       return isAuthenticated() && 
         (request.auth.token.email == "adailton.medeiros@gmail.com" || 
-         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         (userProfileExists() && 
           getUserData().email == "adailton.medeiros@gmail.com"));
+    }
+
+    // Helper: Is the user a member of the target group?
+    function isGroupMember(groupId) {
+      return isAuthenticated() &&
+        (isSuperAdmin() ||
+         (userProfileExists() && getUserData().groupId == groupId));
     }
 
     // Helper: Is the user a leader (admin) of the target group?
     function isGroupAdmin(groupId) {
       return isAuthenticated() && 
         (isSuperAdmin() || 
-         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         (userProfileExists() && 
           getUserData().groupId == groupId && 
           getUserData().role == 'admin'));
     }
 
     // --- RULES FOR COLLECTIONS ---
 
-    // 1. Users Profiles
+    // 1. Users Profiles — each user reads only their own profile; admins read all
     match /users/{userId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
       allow create: if isAuthenticated() && request.auth.uid == userId;
       allow update: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
       allow delete: if isSuperAdmin();
     }
 
-    // 2. Coffee Buying Groups
+    // 2. Coffee Buying Groups — only group members or super admin can read
     match /groups/{groupId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (isSuperAdmin() || getUserData().canCreateGroup == true);
+      allow read: if isAuthenticated() && isGroupMember(groupId);
+      allow create: if isAuthenticated() && (isSuperAdmin() || (userProfileExists() && getUserData().canCreateGroup == true));
       allow update: if isAuthenticated() && (isSuperAdmin() || resource.data.adminId == request.auth.uid);
       allow delete: if isSuperAdmin();
     }
 
-    // 3. Collective Coffee Orders
+    // 3. Collective Coffee Orders — only group members or admin can read
     match /orders/{orderId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && isGroupMember(resource.data.groupId);
       allow create: if isAuthenticated() && isGroupAdmin(request.resource.data.groupId);
       allow update: if isAuthenticated() && isGroupAdmin(resource.data.groupId);
       allow delete: if isAuthenticated() && isGroupAdmin(resource.data.groupId);
     }
 
-    // 4. Order Participations
+    // 4. Order Participations — user sees own participations; group admin sees all in the group
     match /participations/{participationId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && 
+        (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
       allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
     }
 
-    // 5. Degustation Reviews
+    // 5. Degustation Reviews — authenticated users read all reviews (community feature)
     match /reviews/{reviewId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
       allow update, delete: if isSuperAdmin();
     }
 
-    // 6. Access Invites Requests
+    // 6. Access Invites Requests — user sees own requests; super admin sees all
     match /group_requests/{requestId} {
       allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSuperAdmin());
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isSuperAdmin();
     }
 
-    // 7. Supplier Products
+    // 7. Supplier Products — public read (promotions visible to guests)
     match /products/{productId} {
-      allow read: if true; // Allow anyone (including guests) to see promotions
-      allow create: if isAuthenticated() && (isSuperAdmin() || getUserData().role == 'supplier');
-      allow update, delete: if isAuthenticated() && (isSuperAdmin() || (getUserData().role == 'supplier' && resource.data.supplierId == request.auth.uid));
+      allow read: if true;
+      allow create: if isAuthenticated() && (isSuperAdmin() || (userProfileExists() && getUserData().role == 'supplier'));
+      allow update, delete: if isAuthenticated() && (isSuperAdmin() || (userProfileExists() && getUserData().role == 'supplier' && resource.data.supplierId == request.auth.uid));
     }
 
-    // 8. Group Supplier History
+    // 8. Group Supplier History — only group members or admin can access
     match /supplier_history/{historyId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated();
+      allow read: if isAuthenticated() && isGroupMember(resource.data.groupId);
+      allow create, update: if isAuthenticated() && isGroupMember(request.resource.data.groupId);
       allow delete: if isSuperAdmin();
     }
   }

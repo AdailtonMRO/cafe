@@ -1,5 +1,6 @@
 import { coffeeNews, getCoffeeNewsStory } from './coffee-news.js';
 import { buildConsumerRanking } from './dashboard-utils.js';
+import { askBaristaAI, generateCuppingNotes, getStoredApiKey, setStoredApiKey } from './ai-service.js';
 
 const appState = {
   user: null,
@@ -13,6 +14,7 @@ const appState = {
   firebaseMode: false,
   firebaseError: null,
   activeAuthTab: 'login', // 'login' or 'register'
+  idToken: null, // Firebase ID Token — renovado automaticamente a cada ~1h
   activeGroupTab: 'join', // 'join' or 'create'
   
   // Supplier states and promotions
@@ -21,15 +23,45 @@ const appState = {
 
   // Super Admin panel states
   currentView: 'dashboard', // 'dashboard' or 'super_admin'
-  superAdminTab: 'groups', // 'groups' or 'users' or 'requests'
+  superAdminTab: 'groups', // 'groups' | 'users' | 'requests' | 'suppliers' | 'security'
   superGroups: [],
   superUsers: [],
   superRequests: [],
   supplierHistory: [],
+  baristaChatHistory: [],
 };
 
 // Global real-time unsubscribers
 let ordersUnsubscribe = null;
+
+// =============================================================================
+// SECURITY — Login Rate Limiter (client-side brute-force protection)
+// =============================================================================
+const loginRateLimit = {
+  attempts: 0,
+  maxAttempts: 5,
+  lockedUntil: 0,
+  // Cooldowns progressivos por número de tentativas: 30s, 60s, 5min
+  cooldownsMs: [0, 0, 0, 0, 0, 30_000, 60_000, 300_000],
+  isLocked() {
+    return Date.now() < this.lockedUntil;
+  },
+  getRemainingSeconds() {
+    return Math.ceil((this.lockedUntil - Date.now()) / 1000);
+  },
+  recordFailure() {
+    this.attempts++;
+    const cooldown = this.cooldownsMs[Math.min(this.attempts, this.cooldownsMs.length - 1)];
+    if (cooldown > 0) {
+      this.lockedUntil = Date.now() + cooldown;
+      console.warn(`[Security] Login bloqueado por ${cooldown / 1000}s após ${this.attempts} tentativa(s) falha(s).`);
+    }
+  },
+  reset() {
+    this.attempts = 0;
+    this.lockedUntil = 0;
+  }
+};
 
 function calculateTotal(quantityKg, pricePerKg) {
   return Number((quantityKg * pricePerKg).toFixed(2));
@@ -318,38 +350,67 @@ function showModal({ title, bodyHtml, confirmText = 'Confirmar', cancelText = 'C
     <div class="modal-content">
       <div class="modal-header">
         <h3>${title}</h3>
-        <button class="modal-close" type="button">&times;</button>
+        <button class="modal-close" type="button" aria-label="Fechar">&times;</button>
       </div>
       <div class="modal-body">
         ${bodyHtml}
       </div>
       <div class="modal-footer">
-        <button class="secondary modal-cancel-btn" type="button">${cancelText}</button>
-        <button class="primary modal-confirm-btn" type="button">${confirmText}</button>
+        ${cancelText ? `<button class="secondary modal-cancel-btn" type="button">${cancelText}</button>` : ''}
+        ${confirmText ? `<button class="primary modal-confirm-btn" type="button">${confirmText}</button>` : ''}
       </div>
     </div>
   `;
 
   container.appendChild(backdrop);
 
+  // Prevent default form submits on any form inside the modal
+  backdrop.querySelectorAll('form').forEach(form => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const confirmBtn = backdrop.querySelector('.modal-confirm-btn');
+      if (confirmBtn) confirmBtn.click();
+    });
+  });
+
   // Trigger optional onShow hook for custom bindings
   if (onShow) {
-    onShow(backdrop);
+    try {
+      onShow(backdrop);
+    } catch (err) {
+      console.error("Erro no evento onShow do modal:", err);
+    }
   }
 
   const closeModal = () => {
     backdrop.style.pointerEvents = 'none';
-    // Remove immediately from DOM to prevent phantom overlays blocking page clicks
     backdrop.remove();
   };
 
-  backdrop.querySelector('.modal-close').addEventListener('click', closeModal);
-  backdrop.querySelector('.modal-cancel-btn').addEventListener('click', closeModal);
+  backdrop.querySelector('.modal-close')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    closeModal();
+  });
 
-  backdrop.querySelector('.modal-confirm-btn').addEventListener('click', async () => {
-    const success = await onConfirm(backdrop);
-    if (success !== false) {
+  backdrop.querySelector('.modal-cancel-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    closeModal();
+  });
+
+  backdrop.querySelector('.modal-confirm-btn')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!onConfirm) {
       closeModal();
+      return;
+    }
+    try {
+      const success = await onConfirm(backdrop);
+      if (success !== false) {
+        closeModal();
+      }
+    } catch (err) {
+      console.error("Erro na confirmação do modal:", err);
+      showToast(`Erro ao processar: ${err.message}`, 'error');
     }
   });
 }
@@ -542,6 +603,24 @@ async function initializeFirebase() {
     console.error("Erro ao carregar produtos parceiros no inicio:", err);
   }
 
+  // -------------------------------------------------------------------------
+  // PONTO 1 — Renovação automática de token
+  // O Firebase renova o ID Token a cada ~1h. Este listener sincroniza o token
+  // fresco para uso em chamadas autenticadas (ex: Cloud Functions, APIs).
+  // -------------------------------------------------------------------------
+  auth.onIdTokenChanged(async (user) => {
+    if (user) {
+      try {
+        appState.idToken = await user.getIdToken(false);
+        console.debug('[Security] ID Token sincronizado/renovado.');
+      } catch (e) {
+        console.warn('[Security] Falha ao obter ID Token:', e.message);
+      }
+    } else {
+      appState.idToken = null;
+    }
+  });
+
   auth.onAuthStateChanged(async (user) => {
     appState.loading = true;
     render();
@@ -657,31 +736,50 @@ async function loadFirebaseData(uid) {
         isFirstLoad = false;
         render();
       }, (error) => {
-        console.error("Erro na escuta de pedidos em tempo real:", error);
+        console.warn("Aviso na escuta de pedidos em tempo real:", error);
       });
 
-    // Parallelize Firestore queries for participations, users list, and limited reviews
-    // Parallelize Firestore queries for participations, users list, products and limited reviews
+    // Parallelize Firestore queries for participations, users list, products and limited reviews with robust fallbacks
     const isAdmin = appState.profile?.role === 'admin';
-    const participationsPromise = isAdmin
+    const participationsPromise = (isAdmin
       ? db.collection('participations').where('groupId', '==', gId).get()
-      : db.collection('participations').where('groupId', '==', gId).where('userId', '==', uid).get();
+      : db.collection('participations').where('groupId', '==', gId).where('userId', '==', uid).get()
+    ).catch((err) => {
+      console.warn("Aviso ao carregar participações:", err);
+      return { docs: [] };
+    });
 
-    const reviewsPromise = db.collection('reviews').orderBy('createdAt', 'desc').limit(10).get();
+    const reviewsPromise = db.collection('reviews').orderBy('createdAt', 'desc').limit(10).get()
+      .catch(() => db.collection('reviews').limit(10).get())
+      .catch((err) => {
+        console.warn("Aviso ao carregar avaliações:", err);
+        return { docs: [] };
+      });
 
-    // Fetch users of the group if user is group admin or super admin
     const loadUsers = isAdmin || isPlatformAdmin();
     const usersPromise = loadUsers
-      ? db.collection('users').where('groupId', '==', gId).get()
+      ? db.collection('users').where('groupId', '==', gId).get().catch((err) => {
+          console.warn("Aviso ao carregar usuários:", err);
+          return { docs: [] };
+        })
       : Promise.resolve(null);
 
     const productsPromise = db.collection('products')
       .where('deadline', '>=', new Date().toISOString().slice(0, 10))
-      .get();
+      .get()
+      .catch(() => db.collection('products').get())
+      .catch((err) => {
+        console.warn("Aviso ao carregar produtos:", err);
+        return { docs: [] };
+      });
 
     const supplierHistoryPromise = db.collection('supplier_history')
       .where('groupId', '==', gId)
-      .get();
+      .get()
+      .catch((err) => {
+        console.warn("Aviso ao carregar histórico de fornecedores:", err);
+        return { docs: [] };
+      });
 
     const [partsSnap, reviewsSnap, usersSnap, productsSnap, supplierHistorySnap] = await Promise.all([
       participationsPromise,
@@ -691,17 +789,16 @@ async function loadFirebaseData(uid) {
       supplierHistoryPromise
     ]);
 
-    appState.participations = partsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-    appState.reviews = reviewsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-    appState.products = productsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-    appState.supplierHistory = supplierHistorySnap ? supplierHistorySnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) : [];
+    appState.participations = partsSnap?.docs ? partsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) : [];
+    appState.reviews = reviewsSnap?.docs ? reviewsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) : [];
+    appState.products = productsSnap?.docs ? productsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) : [];
+    appState.supplierHistory = supplierHistorySnap?.docs ? supplierHistorySnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) : [];
     
-    if (usersSnap) {
+    if (usersSnap?.docs) {
       appState.usersList = usersSnap.docs.map((doc) => ({ uid: doc.id, ...doc.data() }));
     }
   } catch (error) {
-    console.error("Erro ao carregar dados do Firebase:", error);
-    showToast("Erro ao carregar dados remotos.", "warning");
+    console.warn("Erro ao carregar dados do Firebase, mantendo estado atual:", error);
   }
 }
 
@@ -849,6 +946,190 @@ function renderPlatformAdminToggle() {
   `;
 }
 
+function renderRoleSwitcherNav() {
+  const current = appState.activeRoleView || 'auto';
+  const role = appState.profile?.role || 'user';
+  const isLeader = role === 'admin';
+  const isSupplier = role === 'supplier';
+
+  return `
+    <nav class="role-switcher-container" aria-label="Navegação por perfil">
+      <button type="button" class="role-tab ${current === 'auto' || current === 'buyer' ? 'active' : ''}" data-role-view="buyer">
+        🛒 Visão Participante (Comprador)
+      </button>
+      <button type="button" class="role-tab ${current === 'leader' || (current === 'auto' && isLeader) ? 'active' : ''}" data-role-view="leader">
+        📋 Visão Líder do Grupo
+      </button>
+      <button type="button" class="role-tab ${current === 'supplier' || (current === 'auto' && isSupplier) ? 'active' : ''}" data-role-view="supplier">
+        🚚 Visão Fornecedor & Torra
+      </button>
+    </nav>
+  `;
+}
+
+function renderCollectiveGoalWidget() {
+  const openOrders = appState.orders.filter(o => o.status === 'aberto');
+  if (openOrders.length === 0) return '';
+
+  const activeOrder = openOrders[0];
+  const orderParticipations = appState.participations.filter(p => p.orderId === activeOrder.id);
+  const currentTotalKg = orderParticipations.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
+  const targetKg = Number(activeOrder.targetKg || 50); // Default 50kg batch goal
+  const percent = Math.min(100, Math.round((currentTotalKg / targetKg) * 100));
+
+  return `
+    <section class="goal-card">
+      <div class="goal-header">
+        <div>
+          <span class="eyebrow" style="color:var(--accent-strong);">Meta do Lote Coletivo</span>
+          <h4>${activeOrder.title || activeOrder.type || 'Lote de Café Especial'}</h4>
+        </div>
+        <span class="goal-percentage">${percent}%</span>
+      </div>
+      <div class="goal-progress-track">
+        <div class="goal-progress-fill" style="width: ${percent}%;"></div>
+      </div>
+      <div class="goal-meta">
+        <span>Alcançado: <strong>${currentTotalKg.toFixed(1)} kg</strong> de ${targetKg} kg</span>
+        <span>Prazo: <strong>${activeOrder.deadline || 'Em breve'}</strong></span>
+      </div>
+    </section>
+  `;
+}
+
+function renderSensoryCatalogWidget() {
+  const catalog = [
+    {
+      id: 'cat_1',
+      title: 'Catuaí Vermelho - Sítio São José',
+      origin: 'Alta Mogiana (1.200m)',
+      score: '88.5 SCA',
+      roast: 'Torra Média Clássica',
+      notes: ['Caramelo', 'Chocolate Amargo', 'Acidez Cítrica'],
+      pricePerKg: 65.00
+    },
+    {
+      id: 'cat_2',
+      title: 'Bourbon Amarelo - Fazenda Primavera',
+      origin: 'Cerrado Mineiro (1.150m)',
+      score: '87.0 SCA',
+      roast: 'Torra Clara Filtrado',
+      notes: ['Mel', 'Jasmim', 'Flor Amarela'],
+      pricePerKg: 72.00
+    },
+    {
+      id: 'cat_3',
+      title: 'Geisha Especial - Vale do Caparaó',
+      origin: 'Caparaó (1.400m)',
+      score: '91.0 SCA',
+      roast: 'Torra Clara Artesanal',
+      notes: ['Bergamota', 'Pêssego', 'Chá de Erva-Doce'],
+      pricePerKg: 110.00
+    }
+  ];
+
+  return `
+    <section class="card">
+      <div class="section-title">
+        <div>
+          <p class="eyebrow">Seleção do Mês</p>
+          <h2>Catálogo Sensorial de Café Especial</h2>
+        </div>
+      </div>
+      <div class="sensory-card-grid">
+        ${catalog.map(item => `
+          <div class="sensory-card">
+            <div>
+              <div class="sensory-header">
+                <div>
+                  <h3 style="font-size:1.05rem; margin-bottom:0.25rem;">${item.title}</h3>
+                  <p style="font-size:0.78rem; color:var(--muted);">${item.origin} &bull; ${item.roast}</p>
+                </div>
+                <span class="score-badge">★ ${item.score}</span>
+              </div>
+              <div class="sensory-notes">
+                ${item.notes.map(n => `<span class="sensory-note-pill">${n}</span>`).join('')}
+              </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:0.85rem; margin-top:0.5rem;">
+              <div>
+                <span style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; display:block;">Preço Coletivo</span>
+                <strong style="font-size:1.15rem; color:var(--accent-strong);" class="tabular-num">R$ ${item.pricePerKg.toFixed(2)}/kg</strong>
+              </div>
+              <div class="qty-stepper">
+                <button type="button" class="qty-btn qty-minus-btn" data-cat-id="${item.id}">-</button>
+                <input type="text" class="qty-input" id="qty_${item.id}" value="1" readonly />
+                <button type="button" class="qty-btn qty-plus-btn" data-cat-id="${item.id}">+</button>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderSupplierDashboardSection() {
+  const history = appState.supplierHistory || [];
+  const totalKgSold = history.reduce((sum, h) => sum + (Number(h.totalKg) || 15), 0);
+  const totalRevenue = history.reduce((sum, h) => sum + ((Number(h.totalKg) || 15) * (Number(h.lastPricePerKg) || 60)), 0);
+
+  return `
+    <section class="card">
+      <div class="section-title">
+        <div>
+          <p class="eyebrow">Painel do Produtor & Torrefação</p>
+          <h2>Controle de Fornecimento & Lotes de Torra</h2>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
+        <div class="metric-card">
+          <span>Volume Total Vendido</span>
+          <strong style="font-size:1.4rem;" class="tabular-num">${totalKgSold.toFixed(1)} kg</strong>
+        </div>
+        <div class="metric-card">
+          <span>Faturamento Consolidado</span>
+          <strong style="font-size:1.4rem; color:var(--success);" class="tabular-num">R$ ${totalRevenue.toFixed(2)}</strong>
+        </div>
+        <div class="metric-card">
+          <span>Status do Próximo Lote</span>
+          <strong style="font-size:1.1rem; color:var(--accent-strong);">🔥 Em Aguardo de Torra</strong>
+        </div>
+      </div>
+
+      <div class="admin-table-container">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Produtor / Torrefação</th>
+              <th>Variedade</th>
+              <th>Volume (kg)</th>
+              <th>Status de Envio</th>
+              <th>Faturamento Est.</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${history.length > 0 ? history.map(h => `
+              <tr>
+                <td><strong>${h.supplierName}</strong></td>
+                <td>${h.coffeeType}</td>
+                <td class="tabular-num">${h.totalKg || '15'} kg</td>
+                <td><span class="status-pill processando_fornecedor">Aguardando Fechamento</span></td>
+                <td class="tabular-num" style="color:var(--success); font-weight:700;">R$ ${((Number(h.totalKg) || 15) * (Number(h.lastPricePerKg) || 60)).toFixed(2)}</td>
+              </tr>
+            `).join('') : `
+              <tr>
+                <td colspan="5" style="text-align:center; padding:1.5rem; color:var(--muted);">Nenhum fornecimento registrado ainda. Os lotes finalizados aparecerão aqui automaticamente.</td>
+              </tr>
+            `}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderPromotionsCarousel() {
   if (!appState.products || appState.products.length === 0) return '';
 
@@ -894,6 +1175,128 @@ function bindPromoCarouselEvents() {
     render();
   });
 }
+
+function renderBaristaAiWidget() {
+  const history = appState.baristaChatHistory || [];
+  const apiKeySet = Boolean(getStoredApiKey());
+
+  return `
+    <section class="ai-barista-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <span class="ai-badge">✨ Barista AI (Gemini 3.6 Flash)</span>
+          <span style="font-size:0.75rem; color:var(--success); font-weight:600;">Free Tier (Grátis)</span>
+        </div>
+        <button id="configureApiKeyBtn" class="secondary" style="font-size:0.75rem; padding:0.25rem 0.6rem;">
+          ⚙️ Key: ${apiKeySet ? 'Configurada ✓' : 'Adicionar Key'}
+        </button>
+      </div>
+
+      <h3 style="font-family:'Playfair Display', serif; font-size:1.2rem; color:var(--accent-strong); margin-bottom:0.35rem;">
+        Assistente de Extração & Sommelier de Café
+      </h3>
+      <p style="font-size:0.82rem; color:var(--muted); margin-bottom:0.75rem;">
+        Pergunte sobre receitas na V60, Aeropress, Prensa Francesa, moagens ou como harmonizar seus cafés especiais.
+      </p>
+
+      <div style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.85rem;">
+        <button class="secondary ai-preset-btn" data-preset="Qual a moagem recomendada para filtro V60 e proporção de água?" style="font-size:0.72rem; padding:0.25rem 0.5rem;">☕ Receita V60</button>
+        <button class="secondary ai-preset-btn" data-preset="Como evitar que o café fique muito amargo ou ácido?" style="font-size:0.72rem; padding:0.25rem 0.5rem;">🎯 Ajuste de Sabor</button>
+        <button class="secondary ai-preset-btn" data-preset="Quais métodos de preparo destacam notas frutadas e florais?" style="font-size:0.72rem; padding:0.25rem 0.5rem;">💡 Notas Frutadas</button>
+      </div>
+
+      <div class="ai-chat-window">
+        <div id="aiChatMessages" class="ai-chat-messages">
+          ${history.length === 0 ? `
+            <div class="ai-message barista">
+              <div class="ai-avatar">☕</div>
+              <div class="ai-message-body">
+                Olá! Sou seu <strong>Barista AI</strong>. Como posso te ajudar a extrair o melhor sabor do seu café hoje?
+              </div>
+            </div>
+          ` : history.map(msg => `
+            <div class="ai-message ${msg.sender}">
+              <div class="ai-avatar">${msg.sender === 'barista' ? '☕' : '👤'}</div>
+              <div class="ai-message-body">
+                ${msg.text.replace(/\n/g, '<br>')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <form id="aiChatForm" class="ai-chat-input-bar">
+          <input type="text" id="aiChatInput" placeholder="Faça uma pergunta ao Barista AI..." required />
+          <button type="submit" class="btn-ai" style="padding:0.4rem 0.9rem; font-size:0.8rem;">Enviar</button>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function bindBaristaAiEvents() {
+  const form = document.getElementById('aiChatForm');
+  const input = document.getElementById('aiChatInput');
+  const configBtn = document.getElementById('configureApiKeyBtn');
+
+  configBtn?.addEventListener('click', () => {
+    const currentKey = getStoredApiKey();
+    showModal({
+      title: '⚙️ Configurar Chave da API Gemini (Free Tier)',
+      bodyHtml: `
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">
+          Obtenha sua chave 100% gratuita no <strong>Google AI Studio</strong> (Gemini Developer API) para liberar o Barista AI.
+        </p>
+        <div class="form-group">
+          <label>Chave da API Gemini (API Key):</label>
+          <input type="password" id="geminiApiKeyInput" value="${currentKey}" placeholder="AIzaSy..." />
+        </div>
+      `,
+      confirmText: 'Salvar Chave',
+      cancelText: 'Remover Chave',
+      onConfirm: () => {
+        const val = document.getElementById('geminiApiKeyInput')?.value;
+        setStoredApiKey(val);
+        showToast('Chave da API Gemini salva!');
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll('.ai-preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (input) {
+        input.value = btn.getAttribute('data-preset') || '';
+        form?.dispatchEvent(new Event('submit'));
+      }
+    });
+  });
+
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+
+    if (!appState.baristaChatHistory) appState.baristaChatHistory = [];
+    appState.baristaChatHistory.push({ sender: 'user', text });
+    input.value = '';
+
+    // Waiting message
+    appState.baristaChatHistory.push({ sender: 'barista', text: '<i>Pensando na resposta... ☕</i>' });
+    render();
+
+    const messagesEl = document.getElementById('aiChatMessages');
+    if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    const history = appState.baristaChatHistory.slice(0, -1);
+    const reply = await askBaristaAI(text, history);
+
+    appState.baristaChatHistory[appState.baristaChatHistory.length - 1] = { sender: 'barista', text: reply };
+    render();
+
+    const updatedMessagesEl = document.getElementById('aiChatMessages');
+    if (updatedMessagesEl) updatedMessagesEl.scrollTop = updatedMessagesEl.scrollHeight;
+  });
+}
+
 
 function render() {
   const app = document.getElementById('app');
@@ -955,6 +1358,7 @@ function render() {
       <div class="dashboard-grid">
         <div style="display:flex; flex-direction:column; gap:1.5rem">
           ${renderPromotionsCarousel()}
+          ${renderBaristaAiWidget()}
           <section class="card">
             <div class="section-title">
               <h2>Novidades do café</h2>
@@ -1073,12 +1477,23 @@ function render() {
       const name = document.getElementById('nameInput')?.value.trim() || '';
       const requestedType = document.getElementById('accountTypeInput')?.value || 'user';
 
+      // -----------------------------------------------------------------------
+      // PONTO 2 — Rate Limiting: bloquear tentativas excessivas de login
+      // -----------------------------------------------------------------------
+      if (appState.activeAuthTab === 'login' && loginRateLimit.isLocked()) {
+        const secs = loginRateLimit.getRemainingSeconds();
+        showToast(`Muitas tentativas falhas. Tente novamente em ${secs}s.`, 'error');
+        return;
+      }
+
       appState.loading = true;
       render();
 
       try {
         if (appState.firebaseMode) {
           await handleFirebaseAuth(appState.activeAuthTab, name, email, password, requestedType);
+          // Login bem-sucedido: resetar contador de tentativas
+          if (appState.activeAuthTab === 'login') loginRateLimit.reset();
         } else {
           appState.user = { uid: crypto.randomUUID(), email, displayName: name || email.split('@')[0] };
           appState.profile = {
@@ -1095,7 +1510,23 @@ function render() {
           showToast(requestedType === 'supplier' ? 'Cadastro de fornecedor enviado para aprovação!' : `Conectado localmente como ${appState.profile.name}`);
         }
       } catch (error) {
-        showToast(error.message || 'Erro ao autenticar', 'error');
+        // Registrar falha de login para rate limiting
+        if (appState.activeAuthTab === 'login' && appState.firebaseMode) {
+          loginRateLimit.recordFailure();
+          if (loginRateLimit.isLocked()) {
+            showToast(`Login bloqueado por ${loginRateLimit.getRemainingSeconds()}s após múltiplas tentativas.`, 'error');
+          } else {
+            const remaining = loginRateLimit.maxAttempts - loginRateLimit.attempts;
+            showToast(
+              remaining > 0
+                ? `${error.message || 'Credenciais inválidas.'} (${remaining} tentativa${remaining > 1 ? 's' : ''} restante${remaining > 1 ? 's' : ''})`
+                : (error.message || 'Erro ao autenticar'),
+              'error'
+            );
+          }
+        } else {
+          showToast(error.message || 'Erro ao autenticar', 'error');
+        }
       } finally {
         appState.loading = false;
         render();
@@ -1513,6 +1944,8 @@ function render() {
       </div>
     </header>
 
+    ${renderRoleSwitcherNav()}
+
     <div class="dashboard-grid">
       ${!appState.group ? `
         <div style="grid-column: span 2; display:flex; flex-direction:column; gap:1.5rem;">
@@ -1529,11 +1962,24 @@ function render() {
         </div>
       ` : `
         <div style="display:flex; flex-direction:column; gap:1.5rem;">
+          ${(appState.activeRoleView === 'supplier') ? renderSupplierDashboardSection() : ''}
+
+          ${(appState.activeRoleView === 'leader' || (appState.activeRoleView === 'auto' && isAdmin)) ? `
+            ${renderCollectiveGoalWidget()}
+            ${renderAdminOrdersSection()}
+            ${renderAdminParticipationsSection()}
+            ${renderUserOrdersSection()}
+          ` : ''}
+
+          ${(!appState.activeRoleView || appState.activeRoleView === 'buyer' || (appState.activeRoleView === 'auto' && !isAdmin && !isSupplier)) ? `
+            ${renderCollectiveGoalWidget()}
+            ${renderSensoryCatalogWidget()}
+            ${renderUserOrdersSection()}
+            ${renderUserParticipationsSection()}
+          ` : ''}
+
           ${renderPromotionsCarousel()}
-          ${renderUserOrdersSection()}
-          ${isAdmin ? renderAdminOrdersSection() : ''}
-          ${renderUserParticipationsSection()}
-          ${isAdmin ? renderAdminParticipationsSection() : ''}
+          ${renderBaristaAiWidget()}
 
           <section class="card">
             <div class="section-title">
@@ -1745,9 +2191,48 @@ function render() {
     bindUserEvents();
   }
 
+  // Role Switcher Nav Handler
+  document.querySelectorAll('[data-role-view]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      appState.activeRoleView = btn.getAttribute('data-role-view');
+      render();
+    });
+  });
+
+  // Quantity Stepper (-) and (+) Buttons Handlers
+  document.querySelectorAll('.qty-minus-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = btn.getAttribute('data-cat-id');
+      const input = document.getElementById(`qty_${id}`);
+      if (input) {
+        let val = parseInt(input.value, 10) || 1;
+        if (val > 1) {
+          input.value = val - 1;
+          showToast(`Quantidade ajustada para ${input.value} kg`);
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll('.qty-plus-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = btn.getAttribute('data-cat-id');
+      const input = document.getElementById(`qty_${id}`);
+      if (input) {
+        let val = parseInt(input.value, 10) || 1;
+        input.value = val + 1;
+        showToast(`Quantidade ajustada para ${input.value} kg`);
+      }
+    });
+  });
+
   renderReviews();
   bindReviewFormSubmit();
   bindPromoCarouselEvents();
+  bindBaristaAiEvents();
 }
 
 // =============================================================================
@@ -1878,7 +2363,10 @@ function bindSupplierEvents() {
             <input type="text" id="prodName" placeholder="Ex: Catuaí Vermelho - Sítio Vista Alegre (Mogiana)" required />
           </div>
           <div class="form-group">
-            <label for="prodDesc">Descrição do Café (Variedade, torra, notas sensoriais...)</label>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <label for="prodDesc">Descrição do Café (Variedade, torra, notas...)</label>
+              <button type="button" id="btnAiCupping" class="btn-ai" style="font-size:0.7rem; padding:0.2rem 0.5rem; border-radius:6px; cursor:pointer;">✨ Ficha Sensorial com IA</button>
+            </div>
             <textarea id="prodDesc" rows="3" placeholder="Ex: Café arábica, torra média, notas de caramelo e chocolate, corpo aveludado e acidez equilibrada." required></textarea>
           </div>
           <div class="form-group">
@@ -1896,6 +2384,32 @@ function bindSupplierEvents() {
         </form>
       `,
       confirmText: 'Anunciar Produto',
+      onShow: (modalEl) => {
+        modalEl.querySelector('#btnAiCupping')?.addEventListener('click', async () => {
+          const name = modalEl.querySelector('#prodName')?.value || 'Café Arábica Especial';
+          const descArea = modalEl.querySelector('#prodDesc');
+          const aiBtn = modalEl.querySelector('#btnAiCupping');
+
+          if (!getStoredApiKey()) {
+            showToast('Por favor, adicione sua chave gratuita do Gemini no Barista AI antes!', 'warning');
+            return;
+          }
+
+          aiBtn.disabled = true;
+          aiBtn.innerText = '✨ Gerando...';
+
+          try {
+            const res = await generateCuppingNotes({ name, origin: 'Alta Mogiana / Sul de Minas', roast: 'Média' });
+            descArea.value = `${res.descricaoCompleta}\n\n[Aroma: ${res.aroma} | Acidez: ${res.acidez} | Corpo: ${res.corpo} | Notas: ${res.notasDegustacao.join(', ')}]`;
+            showToast('Ficha Sensorial gerada com Gemini!');
+          } catch (err) {
+            showToast(`Erro na IA: ${err.message}`, 'error');
+          } finally {
+            aiBtn.disabled = false;
+            aiBtn.innerText = '✨ Ficha Sensorial com IA';
+          }
+        });
+      },
       onConfirm: async (modalEl) => {
         const name = modalEl.querySelector('#prodName').value.trim();
         const description = modalEl.querySelector('#prodDesc').value.trim();
@@ -2075,6 +2589,9 @@ function renderSuperAdminPanel() {
       <button class="super-tab ${appState.superAdminTab === 'requests' ? 'active' : ''}" data-super-tab="requests">
         Solicitações (${appState.superRequests.filter(r => r.status === 'pending').length + appState.superUsers.filter(u => u.requestSupplierStatus === 'pending').length} pendentes)
       </button>
+      <button class="super-tab ${appState.superAdminTab === 'security' ? 'active' : ''}" data-super-tab="security" style="gap:0.4rem;">
+        🔐 Segurança
+      </button>
     </div>
 
     <section class="card">
@@ -2116,6 +2633,64 @@ function renderSuperAdminPanel() {
 }
 
 function renderSuperAdminTabContent() {
+  if (appState.superAdminTab === 'security') {
+    const monitor = window.securityMonitor;
+    const summary = monitor ? monitor.getSummary() : null;
+    const checks = summary ? summary.checks : [];
+    const score = summary ? summary.score : null;
+    const scoreColor = score === null ? '#888' : score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
+    const scoreLabel = score === null ? 'Carregando...' : score >= 80 ? 'Bom' : score >= 50 ? 'Atenção' : 'Crítico';
+    const lastRun = summary?.lastRunAt ? new Date(summary.lastRunAt).toLocaleTimeString('pt-BR') : 'Aguardando...';
+    const statusIcon = (sev) => sev === 'ok' ? '✅' : sev === 'warning' ? '⚠️' : '🚨';
+    const statusLabel = (sev) => sev === 'ok' ? 'OK' : sev === 'warning' ? 'Aviso' : 'Crítico';
+    return `
+      <div class="section-title">
+        <h2>🔐 Monitor de Segurança</h2>
+        <button id="secRefreshBtn" class="secondary" style="font-size:0.85rem;">↻ Verificar Agora</button>
+      </div>
+
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:1rem; margin-bottom:1.5rem;">
+        <div style="background:var(--card-bg,#1a1612); border-radius:12px; padding:1.2rem; text-align:center; border: 2px solid ${scoreColor};">
+          <div style="font-size:2.2rem; font-weight:800; color:${scoreColor};">${score ?? '—'}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted,#aaa); margin-top:0.25rem;">Score de Segurança</div>
+          <div style="font-size:0.85rem; font-weight:600; color:${scoreColor};">${scoreLabel}</div>
+        </div>
+        <div style="background:var(--card-bg,#1a1612); border-radius:12px; padding:1.2rem; text-align:center;">
+          <div style="font-size:2.2rem; font-weight:800; color:#22c55e;">${summary?.oks ?? 0}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted,#aaa); margin-top:0.25rem;">Verificações OK</div>
+        </div>
+        <div style="background:var(--card-bg,#1a1612); border-radius:12px; padding:1.2rem; text-align:center;">
+          <div style="font-size:2.2rem; font-weight:800; color:#f59e0b;">${summary?.warnings ?? 0}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted,#aaa); margin-top:0.25rem;">Avisos</div>
+        </div>
+        <div style="background:var(--card-bg,#1a1612); border-radius:12px; padding:1.2rem; text-align:center;">
+          <div style="font-size:2.2rem; font-weight:800; color:#ef4444;">${summary?.criticals ?? 0}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted,#aaa); margin-top:0.25rem;">Críticos</div>
+        </div>
+      </div>
+
+      <div style="font-size:0.75rem; color:var(--text-muted,#aaa); margin-bottom:1rem;">Última verificação: ${lastRun} — Próxima automática em ~5 min</div>
+
+      <div class="admin-table-container">
+        <table class="admin-table">
+          <thead><tr>
+            <th>Status</th><th>Verificação</th><th>Detalhe</th><th>Atualizado</th>
+          </tr></thead>
+          <tbody>
+            ${checks.length === 0 ? '<tr><td colspan="4" style="text-align:center; padding:2rem; color:var(--text-muted,#aaa);">Aguardando primeira verificação...</td></tr>' :
+              checks.map(c => `
+                <tr>
+                  <td>${statusIcon(c.severity)} <span style="font-size:0.75rem; color: ${c.severity === 'ok' ? '#22c55e' : c.severity === 'warning' ? '#f59e0b' : '#ef4444'};">${statusLabel(c.severity)}</span></td>
+                  <td><strong>${c.label}</strong></td>
+                  <td style="font-size:0.82rem; color:var(--text-muted,#bbb);">${c.detail}</td>
+                  <td style="font-size:0.75rem; color:var(--text-muted,#888);">${c.updatedAt ? new Date(c.updatedAt).toLocaleTimeString('pt-BR') : '—'}</td>
+                </tr>`).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
   if (appState.superAdminTab === 'groups') {
     return `
       <div class="section-title">
@@ -2361,6 +2936,14 @@ function renderSuperAdminTabContent() {
 
 function bindSuperAdminEvents() {
   const db = appState.firebaseMode ? window.firebase.firestore() : null;
+
+  // Security Monitor — refresh button
+  document.getElementById('secRefreshBtn')?.addEventListener('click', async () => {
+    if (window.securityMonitor) {
+      await window.securityMonitor.runAllChecks();
+      render();
+    }
+  });
 
   // Add Group Manually
   document.getElementById('superCreateGroupBtn')?.addEventListener('click', () => {
@@ -4317,6 +4900,43 @@ function bindAdminEvents() {
     });
   });
 
+function renderModalCoffeeBlocks(coffees, uniqueSuppliers = []) {
+  if (!coffees || coffees.length === 0) {
+    return `<p style="font-size:0.8rem; color:var(--muted); text-align:center; padding:0.5rem;">Nenhum café adicionado.</p>`;
+  }
+
+  return coffees.map((coffee, idx) => `
+    <div class="modal-coffee-block" style="background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:var(--radius-md); padding:0.85rem; margin-bottom:0.85rem; position:relative;">
+      <div class="modal-coffee-block-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; font-weight:700; font-size:0.85rem; color:var(--accent-strong);">
+        <span>☕ Café #${idx + 1}</span>
+        ${coffees.length > 1 ? `
+          <button type="button" class="remove-coffee-block-btn danger" data-index="${idx}" style="font-size:0.7rem; padding:0.2rem 0.5rem; cursor:pointer;">&times; Remover</button>
+        ` : ''}
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem; margin-bottom:0.6rem;">
+        <div class="form-group">
+          <label style="font-size:0.75rem;">Fornecedor / Torrefação</label>
+          <input type="text" class="coffee-supplier-input" list="supplierDatalist" value="${coffee.supplierName || ''}" placeholder="Ex: Sítio São José" required />
+        </div>
+        <div class="form-group">
+          <label style="font-size:0.75rem;">Variedade / Tipo de Café</label>
+          <input type="text" class="coffee-type-input" list="coffeeTypeDatalist" value="${coffee.type || ''}" placeholder="Ex: Catuaí Vermelho 86 pts" required />
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.6rem;">
+        <div class="form-group">
+          <label style="font-size:0.75rem;">Preço por kg (R$)</label>
+          <input type="number" class="coffee-price-input" min="0.01" step="0.01" value="${coffee.pricePerKg || ''}" placeholder="Ex: 65.00" required />
+        </div>
+        <div class="form-group">
+          <label style="font-size:0.75rem;">Notas Sensoriais / Observações</label>
+          <input type="text" class="coffee-notes-input" value="${coffee.notes || ''}" placeholder="Ex: Caramel, chocolate, acidez cítrica" />
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
   document.getElementById('newOrderButton')?.addEventListener('click', () => {
     const uniqueSuppliers = Array.from(new Set((appState.supplierHistory || []).map(sh => sh.supplierName)));
     let modalCoffees = [{ supplierName: '', type: '', pricePerKg: '', notes: '' }];
@@ -4390,7 +5010,8 @@ function bindAdminEvents() {
         const container = modalEl.querySelector('#modalCoffeesContainer');
         renderModalCoffeesContainer(container);
 
-        modalEl.querySelector('#addMoreCoffeeBtn')?.addEventListener('click', () => {
+        modalEl.querySelector('#addMoreCoffeeBtn')?.addEventListener('click', (e) => {
+          if (e) e.preventDefault();
           modalCoffees = Array.from(container.querySelectorAll('.modal-coffee-block')).map(block => ({
             supplierName: block.querySelector('.coffee-supplier-input').value.trim(),
             type: block.querySelector('.coffee-type-input').value.trim(),
