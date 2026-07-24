@@ -84,5 +84,12 @@ service cloud.firestore {
       allow create: if isAuthenticated() && (isSuperAdmin() || getUserData().role == 'supplier');
       allow update, delete: if isAuthenticated() && (isSuperAdmin() || (getUserData().role == 'supplier' && resource.data.supplierId == request.auth.uid));
     }
+
+    // 8. Group Supplier History
+    match /supplier_history/{historyId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isSuperAdmin();
+    }
   }
 }
