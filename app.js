@@ -162,60 +162,86 @@ function renderOrderStepper(status) {
   `;
 }
 
+function getOrderCoffees(order) {
+  if (order?.coffees && Array.isArray(order.coffees) && order.coffees.length > 0) {
+    return order.coffees;
+  }
+  return [{
+    id: 'default',
+    supplierName: order?.supplierName || '',
+    type: order?.type || 'Café Especial',
+    pricePerKg: Number(order?.pricePerKg || 0),
+    notes: order?.notes || ''
+  }];
+}
+
 function generateSupplierReportText(order, orderParticipations) {
   const groupName = appState.group?.name || 'Nosso Grupo de Café';
   const orderTitle = order.title || order.type || 'Compra Coletiva';
-  const totalKg = orderParticipations.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
-  const memberCount = orderParticipations.length;
+  const coffees = getOrderCoffees(order);
 
   const coffeeTotals = {};
-
-  if (order.coffees && Array.isArray(order.coffees) && order.coffees.length > 0) {
-    order.coffees.forEach(c => {
-      coffeeTotals[c.name] = { kg: 0, pricePerKg: Number(c.pricePerKg || 0), requests: [] };
-    });
-  } else {
-    coffeeTotals[order.type] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0), requests: [] };
-  }
+  coffees.forEach(c => {
+    const key = c.id || c.type;
+    coffeeTotals[key] = {
+      id: c.id,
+      supplierName: c.supplierName || '',
+      type: c.type || 'Café Especial',
+      pricePerKg: Number(c.pricePerKg || 0),
+      notes: c.notes || '',
+      totalKg: 0,
+      requests: []
+    };
+  });
 
   orderParticipations.forEach(p => {
     const uName = getUserName(p.userId) || p.userName || 'Membro';
 
     if (p.items && Array.isArray(p.items) && p.items.length > 0) {
       p.items.forEach(item => {
-        const name = item.coffeeName || order.type;
-        if (!coffeeTotals[name]) {
-          coffeeTotals[name] = { kg: 0, pricePerKg: Number(item.pricePerKg || 0), requests: [] };
+        const matchingKey = Object.keys(coffeeTotals).find(k =>
+          k === item.coffeeId || coffeeTotals[k].type.toLowerCase() === (item.coffeeType || '').toLowerCase()
+        ) || Object.keys(coffeeTotals)[0];
+
+        if (matchingKey && coffeeTotals[matchingKey]) {
+          const itemKg = Number(item.quantityKg || 0);
+          if (itemKg > 0) {
+            coffeeTotals[matchingKey].totalKg += itemKg;
+            coffeeTotals[matchingKey].requests.push({ userName: uName, kg: itemKg });
+          }
         }
-        const itemKg = Number(item.quantityKg || 0);
-        coffeeTotals[name].kg += itemKg;
-        coffeeTotals[name].requests.push({ userName: uName, kg: itemKg });
       });
     } else {
-      const name = order.type;
-      if (!coffeeTotals[name]) {
-        coffeeTotals[name] = { kg: 0, pricePerKg: Number(order.pricePerKg || 0), requests: [] };
+      const firstKey = Object.keys(coffeeTotals)[0];
+      if (firstKey && coffeeTotals[firstKey]) {
+        const itemKg = Number(p.quantityKg || 0);
+        if (itemKg > 0) {
+          coffeeTotals[firstKey].totalKg += itemKg;
+          coffeeTotals[firstKey].requests.push({ userName: uName, kg: itemKg });
+        }
       }
-      const itemKg = Number(p.quantityKg || 0);
-      coffeeTotals[name].kg += itemKg;
-      coffeeTotals[name].requests.push({ userName: uName, kg: itemKg });
     }
   });
 
   let grandTotalValue = 0;
+  let grandTotalKg = 0;
   let coffeeDetailsText = '';
 
-  Object.entries(coffeeTotals).forEach(([coffeeName, data]) => {
-    const itemVal = data.kg * data.pricePerKg;
+  Object.values(coffeeTotals).forEach(cData => {
+    const itemVal = cData.totalKg * cData.pricePerKg;
     grandTotalValue += itemVal;
+    grandTotalKg += cData.totalKg;
 
-    coffeeDetailsText += `\n☕ *${coffeeName.toUpperCase()}*\n`;
-    coffeeDetailsText += `• Valor Unitário: R$ ${data.pricePerKg.toFixed(2)}/kg\n`;
-    coffeeDetailsText += `• Total Solicitado: ${data.kg.toFixed(2)} kg (R$ ${itemVal.toFixed(2)})\n`;
+    coffeeDetailsText += `\n☕ *${cData.type.toUpperCase()}* ${cData.supplierName ? `(${cData.supplierName})` : ''}\n`;
+    coffeeDetailsText += `• Valor Unitário: R$ ${cData.pricePerKg.toFixed(2)}/kg\n`;
+    coffeeDetailsText += `• Total Solicitado: ${cData.totalKg.toFixed(2)} kg (R$ ${itemVal.toFixed(2)})\n`;
+    if (cData.notes) {
+      coffeeDetailsText += `• Perfil Sensorial: ${cData.notes}\n`;
+    }
 
-    if (data.requests.length > 0) {
+    if (cData.requests.length > 0) {
       coffeeDetailsText += `  📋 *Detalhamento por Membro:*\n`;
-      data.requests.forEach(req => {
+      cData.requests.forEach(req => {
         coffeeDetailsText += `   - ${req.userName}: ${req.kg.toFixed(2)} kg\n`;
       });
     } else {
@@ -223,21 +249,21 @@ function generateSupplierReportText(order, orderParticipations) {
     }
   });
 
+  const memberCount = orderParticipations.length;
   const nowStr = new Date().toLocaleDateString('pt-BR');
-  const supplierHeader = order.supplierName ? `\n*Fornecedor:* ${order.supplierName}` : '';
 
   return `📦 *RELATÓRIO ÚNICO PARA FORNECEDOR*
 ========================================
 *Grupo:* ${groupName}
-*Nome da Compra:* ${orderTitle}${supplierHeader}
+*Nome da Compra:* ${orderTitle}
 *Data do Relatório:* ${nowStr}
 ========================================
 ${coffeeDetailsText}
 ========================================
 📊 *RESUMO GERAL CONSOLIDADO:*
 • Total de Participantes: ${memberCount} membro(s)
-• Volume Total Solicitado: ${totalKg.toFixed(2)} kg
-• Valor Total do Pedido: R$ ${grandTotalValue.toFixed(2)}
+• Volume Total Solicitado: ${grandTotalKg.toFixed(2)} kg
+• Valor Total dos Cafés: R$ ${grandTotalValue.toFixed(2)}
 ========================================
 _Gerado via App Coffee Experience_`;
 }
@@ -3325,6 +3351,18 @@ function renderAdminOrdersSection() {
     const currentStatus = order.status || 'aberto';
     const statusLabel = getOrderStatusLabel(currentStatus);
     const displayTitle = order.title || order.type || 'Compra Coletiva';
+    const coffees = getOrderCoffees(order);
+
+    const coffeeCardsHtml = coffees.map(c => `
+      <div class="coffee-item-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+          <span style="font-weight:700; color:var(--text); font-size:0.85rem;">☕ ${c.type}</span>
+          <span style="color:var(--success); font-weight:700; font-size:0.85rem;">R$ ${Number(c.pricePerKg).toFixed(2)}/kg</span>
+        </div>
+        ${c.supplierName ? `<p style="font-size:0.75rem; color:var(--accent-strong); font-weight:600; margin-top:0.1rem;">🏬 Fornecedor: ${c.supplierName}</p>` : ''}
+        ${c.notes ? `<p style="font-size:0.75rem; color:var(--muted); font-style:italic; margin-top:0.1rem;">📝 ${c.notes}</p>` : ''}
+      </div>
+    `).join('');
 
     return `
       <article class="order-item" style="flex-direction:column; align-items:stretch;">
@@ -3334,23 +3372,24 @@ function renderAdminOrdersSection() {
               <strong>${displayTitle}</strong>
               <span class="status-pill ${currentStatus}">${statusLabel}</span>
             </div>
-            <div style="margin-top:0.25rem; font-size:0.85rem;">
-              ${order.supplierName ? `<span style="color:var(--accent-strong); font-weight:600; margin-right:0.75rem;">🏬 Fornecedor: ${order.supplierName}</span>` : ''}
-              <span style="color:var(--muted);">☕ Café: ${order.type}</span>
+            <p style="margin-top:0.2rem; font-size:0.8rem; color:var(--muted);">📅 Prazo Limite: <strong>${order.deadline}</strong></p>
+
+            <div style="margin-top:0.4rem;">
+              <span style="font-size:0.8rem; font-weight:700; color:var(--accent-strong);">Cafés disponíveis neste lote (${coffees.length}):</span>
+              ${coffeeCardsHtml}
             </div>
-            <p style="margin-top:0.2rem; font-size:0.85rem; color:var(--muted);">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
-            ${order.notes ? `<p style="font-size:0.8rem; color:var(--muted); font-style:italic; margin-top:0.25rem; background:rgba(255,255,255,0.03); padding:0.35rem 0.6rem; border-radius:6px;">📝 ${order.notes}</p>` : ''}
-            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
+
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.6rem; align-items:center;">
               <span style="font-size:0.8rem; color:var(--muted);">${participantsCount} participante(s)</span>
               <span style="font-size:0.8rem; color:var(--accent-strong); font-weight:700;">
-                📦 ${totalKg.toFixed(2)} kg &nbsp;|&nbsp; R$ ${totalValue.toFixed(2)}
+                📦 ${totalKg.toFixed(2)} kg total &nbsp;|&nbsp; R$ ${totalValue.toFixed(2)} acumulados
               </span>
             </div>
           </div>
           <div class="actions" style="display:flex; flex-direction:row; flex-wrap:wrap; gap:0.4rem; align-items:center;">
-            <button class="generate-supplier-report-btn secondary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;" title="Gerar relatório de quilos para enviar ao fornecedor">📋 Relatório Fornecedor</button>
+            <button class="generate-supplier-report-btn secondary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;" title="Gerar relatório consolidado de quilos para enviar ao fornecedor">📋 Relatório Fornecedor</button>
             <button class="advance-stage-btn primary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;">Avançar Etapa ➔</button>
-            <button class="edit-order-btn secondary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;">Editar</button>
+            <button class="edit-order-btn secondary" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem;">Editar / + Cafés</button>
             <button class="delete-order-btn danger" data-order-id="${order.id}" style="font-size:0.75rem; padding:0.45rem 0.8rem; border-radius:6px; cursor:pointer;">Excluir</button>
           </div>
         </div>
@@ -3411,11 +3450,13 @@ function renderUserOrdersSection() {
 
     const currentStatus = order.status || 'aberto';
     const statusLabel = getOrderStatusLabel(currentStatus);
+    const coffees = getOrderCoffees(order);
+    const displayTitle = order.title || order.type || 'Compra Coletiva';
 
     let mainActionHtml = '';
 
     if (myParticipation) {
-      const coffeeVal = calculateTotal(myParticipation.quantityKg, order.pricePerKg);
+      const coffeeVal = Number(myParticipation.valueTotal || 0);
       const freightVal = calculateMemberFreightShare(order, myParticipation, orderParticipations);
       const totalPayable = coffeeVal + freightVal;
 
@@ -3434,8 +3475,8 @@ function renderUserOrdersSection() {
 
       mainActionHtml = `
         <div class="actions" style="align-items:flex-end;">
-          <span style="color:var(--success); font-size:0.9rem; font-weight:700;">R$ ${totalPayable.toFixed(2)}</span>
-          ${freightVal > 0 ? `<small style="font-size:0.7rem; color:var(--muted); text-align:right;">(Café R$ ${coffeeVal.toFixed(2)} + Frete R$ ${freightVal.toFixed(2)})</small>` : ''}
+          <span style="color:var(--success); font-size:0.95rem; font-weight:700;">R$ ${totalPayable.toFixed(2)}</span>
+          ${freightVal > 0 ? `<small style="font-size:0.7rem; color:var(--muted); text-align:right;">(Cafés R$ ${coffeeVal.toFixed(2)} + Frete R$ ${freightVal.toFixed(2)})</small>` : ''}
           <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin-top:0.2rem;">
             <span class="status-pill ${myParticipation.paymentStatus}" style="font-size:0.7rem;">Pagamento: ${myParticipation.paymentStatus.toUpperCase()}</span>
           </div>
@@ -3444,21 +3485,39 @@ function renderUserOrdersSection() {
       `;
     } else if (currentStatus === 'aberto') {
       mainActionHtml = `
-        <div class="actions" style="min-width:210px;">
-          <form class="join-order-form" data-order-id="${order.id}" data-price="${order.pricePerKg}" style="display:grid; grid-template-columns:1fr auto; gap:0.5rem; margin:0; align-items:end;">
-            <div class="form-group" style="margin:0;">
-              <label style="font-size:0.75rem;">Qtd. (kg)</label>
-              <input
-                type="number"
-                class="join-qty-input"
-                min="0.1"
-                step="0.1"
-                placeholder="Ex: 0.5"
-                style="padding:0.5rem; font-size:0.85rem;"
-                required
-              />
-            </div>
-            <button type="submit" class="primary" style="padding:0.55rem 0.9rem; font-size:0.8rem; border-radius:8px; margin-bottom:0; height:fit-content; align-self:end;">Participar</button>
+        <div style="width:100%;">
+          <form class="join-order-form" data-order-id="${order.id}" style="margin-top:0.5rem;">
+            <p style="font-size:0.8rem; color:var(--accent-strong); font-weight:600; margin-bottom:0.4rem;">
+              Selecione a quantidade (kg) para cada café desejado neste lote:
+            </p>
+            ${coffees.map(c => `
+              <div class="coffee-item-card">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                  <strong style="font-size:0.85rem; color:var(--text);">☕ ${c.type}</strong>
+                  <span style="color:var(--success); font-weight:700; font-size:0.85rem;">R$ ${Number(c.pricePerKg).toFixed(2)}/kg</span>
+                </div>
+                ${c.supplierName ? `<p style="font-size:0.75rem; color:var(--accent-strong); font-weight:600; margin-top:0.1rem;">🏬 Fornecedor: ${c.supplierName}</p>` : ''}
+                ${c.notes ? `<p style="font-size:0.75rem; color:var(--muted); font-style:italic; margin-top:0.1rem;">📝 ${c.notes}</p>` : ''}
+                <div class="form-group" style="margin-top:0.4rem; margin-bottom:0;">
+                  <label style="font-size:0.75rem;">Sua cota para este café (kg):</label>
+                  <input
+                    type="number"
+                    class="coffee-qty-input"
+                    data-coffee-id="${c.id || c.type}"
+                    data-coffee-type="${c.type}"
+                    data-supplier-name="${c.supplierName || ''}"
+                    data-price="${c.pricePerKg}"
+                    min="0"
+                    step="0.1"
+                    placeholder="Ex: 0.5 (deixe 0 se não quiser este)"
+                    style="padding:0.4rem 0.6rem; font-size:0.85rem;"
+                  />
+                </div>
+              </div>
+            `).join('')}
+            <button type="submit" class="primary" style="width:100%; margin-top:0.6rem; padding:0.6rem; font-size:0.85rem; border-radius:8px;">
+              🛒 Confirmar Pedido na Compra Coletiva
+            </button>
           </form>
         </div>
       `;
@@ -3470,7 +3529,17 @@ function renderUserOrdersSection() {
       `;
     }
 
-    const displayTitle = order.title || order.type || 'Compra Coletiva';
+    const myItemsSummary = myParticipation ? `
+      <div style="margin-top:0.5rem; background:rgba(0,0,0,0.25); border-radius:6px; padding:0.6rem;">
+        <strong style="font-size:0.8rem; color:var(--accent-strong);">📋 Seu Pedido Confirmado (${Number(myParticipation.quantityKg).toFixed(2)} kg total):</strong>
+        ${(myParticipation.items || [{ coffeeType: coffees[0]?.type || order.type, quantityKg: myParticipation.quantityKg, pricePerKg: coffees[0]?.pricePerKg || order.pricePerKg }]).map(item => `
+          <div style="font-size:0.8rem; color:var(--text); margin-top:0.25rem; display:flex; justify-content:space-between;">
+            <span>☕ ${item.coffeeType || item.coffeeName || 'Café'}: <strong>${Number(item.quantityKg).toFixed(2)} kg</strong></span>
+            <span style="color:var(--muted);">R$ ${(Number(item.quantityKg) * Number(item.pricePerKg || 0)).toFixed(2)}</span>
+          </div>
+        `).join('')}
+      </div>
+    ` : '';
 
     return `
       <article class="order-item ${myParticipation ? 'order-item--joined' : 'order-item--available'}" style="flex-direction:column; align-items:stretch;">
@@ -3480,16 +3549,12 @@ function renderUserOrdersSection() {
               <strong>${displayTitle}</strong> ${freightBadge}
               <span class="status-pill ${currentStatus}">${statusLabel}</span>
             </div>
-            <div style="margin-top:0.25rem; font-size:0.85rem;">
-              ${order.supplierName ? `<span style="color:var(--accent-strong); font-weight:600; margin-right:0.75rem;">🏬 Fornecedor: ${order.supplierName}</span>` : ''}
-              <span style="color:var(--muted);">☕ Café: ${order.type}</span>
-            </div>
-            <p style="margin-top:0.2rem; font-size:0.85rem; color:var(--muted);">R$ ${Number(order.pricePerKg).toFixed(2)}/kg — Prazo: ${order.deadline}</p>
-            ${order.notes ? `<p style="font-size:0.8rem; color:var(--muted); font-style:italic; margin-top:0.25rem; background:rgba(255,255,255,0.03); padding:0.35rem 0.6rem; border-radius:6px;">📝 ${order.notes}</p>` : ''}
+            <p style="margin-top:0.2rem; font-size:0.8rem; color:var(--muted);">📅 Prazo Limite: <strong>${order.deadline}</strong></p>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; align-items:center;">
-              ${myParticipation ? `<span class="status-pill pago" style="background:rgba(74,222,128,0.15);">✔ Você pediu ${Number(myParticipation.quantityKg).toFixed(2)} kg</span>` : ''}
+              ${myParticipation ? `<span class="status-pill pago" style="background:rgba(74,222,128,0.15);">✔ Você está participando deste lote</span>` : ''}
               <span style="font-size:0.8rem; color:var(--muted);">Total do grupo: ${totalKg.toFixed(2)} kg</span>
             </div>
+            ${myItemsSummary}
           </div>
           ${mainActionHtml}
         </div>
@@ -3772,16 +3837,59 @@ function bindUserEvents() {
       e.preventDefault();
 
       const orderId = form.getAttribute('data-order-id');
-      const pricePerKg = Number(form.getAttribute('data-price'));
-      const qtyInput = form.querySelector('.join-qty-input');
-      const quantityKg = Number(qtyInput?.value);
+      const order = appState.orders.find(o => o.id === orderId);
+      if (!orderId) return;
 
-      if (!orderId || isNaN(quantityKg) || quantityKg <= 0) {
-        showToast('Informe uma quantidade válida em kg.', 'warning');
+      const items = [];
+      let totalKg = 0;
+      let totalVal = 0;
+
+      const qtyInputs = form.querySelectorAll('.coffee-qty-input');
+      if (qtyInputs.length > 0) {
+        qtyInputs.forEach(input => {
+          const q = Number(input.value || 0);
+          if (q > 0) {
+            const coffeeId = input.getAttribute('data-coffee-id');
+            const pricePerKg = Number(input.getAttribute('data-price') || 0);
+            const coffeeType = input.getAttribute('data-coffee-type') || 'Café Especial';
+            const supplierName = input.getAttribute('data-supplier-name') || '';
+            const itemVal = q * pricePerKg;
+
+            totalKg += q;
+            totalVal += itemVal;
+            items.push({
+              coffeeId,
+              coffeeType,
+              supplierName,
+              pricePerKg,
+              quantityKg: q,
+              total: Number(itemVal.toFixed(2))
+            });
+          }
+        });
+      } else {
+        const singleInput = form.querySelector('.join-qty-input');
+        const q = Number(singleInput?.value || 0);
+        const pricePerKg = Number(form.getAttribute('data-price') || order?.pricePerKg || 0);
+        if (q > 0) {
+          totalKg = q;
+          totalVal = q * pricePerKg;
+          items.push({
+            coffeeId: 'default',
+            coffeeType: order?.type || 'Café Especial',
+            supplierName: order?.supplierName || '',
+            pricePerKg,
+            quantityKg: q,
+            total: Number(totalVal.toFixed(2))
+          });
+        }
+      }
+
+      if (totalKg <= 0 || items.length === 0) {
+        showToast('Informe a quantidade em kg de pelo menos um dos cafés.', 'warning');
         return;
       }
 
-      const valueTotal = calculateTotal(quantityKg, pricePerKg);
       const myName = appState.profile?.name || appState.user?.displayName || 'Usuário';
 
       const newParticipation = {
@@ -3789,8 +3897,9 @@ function bindUserEvents() {
         orderId,
         userId: appState.user.uid,
         userName: myName,
-        quantityKg,
-        valueTotal,
+        items,
+        quantityKg: Number(totalKg.toFixed(2)),
+        valueTotal: Number(totalVal.toFixed(2)),
         paymentStatus: 'pendente',
         pickupStatus: 'aguardando',
         createdAt: new Date().toISOString(),
@@ -3805,7 +3914,7 @@ function bindUserEvents() {
           appState.participations.unshift({ id: crypto.randomUUID(), ...newParticipation });
           saveLocalData();
         }
-        showToast(`Participação registrada! ${quantityKg.toFixed(2)} kg — R$ ${valueTotal.toFixed(2)}`);
+        showToast(`Participação registrada! ${totalKg.toFixed(2)} kg total — R$ ${totalVal.toFixed(2)}`);
         render();
       } catch (error) {
         showToast(`Erro ao registrar: ${error.message}`, 'error');
@@ -4210,45 +4319,36 @@ function bindAdminEvents() {
 
   document.getElementById('newOrderButton')?.addEventListener('click', () => {
     const uniqueSuppliers = Array.from(new Set((appState.supplierHistory || []).map(sh => sh.supplierName)));
+    let modalCoffees = [{ supplierName: '', type: '', pricePerKg: '', notes: '' }];
+
+    const renderModalCoffeesContainer = (containerEl) => {
+      containerEl.innerHTML = renderModalCoffeeBlocks(modalCoffees, uniqueSuppliers);
+      bindBlockRemoveEvents(containerEl);
+    };
+
+    const bindBlockRemoveEvents = (containerEl) => {
+      containerEl.querySelectorAll('.remove-coffee-block-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.getAttribute('data-index'));
+          modalCoffees = Array.from(containerEl.querySelectorAll('.modal-coffee-block')).map(block => ({
+            supplierName: block.querySelector('.coffee-supplier-input').value.trim(),
+            type: block.querySelector('.coffee-type-input').value.trim(),
+            pricePerKg: block.querySelector('.coffee-price-input').value,
+            notes: block.querySelector('.coffee-notes-input').value.trim()
+          }));
+          modalCoffees.splice(idx, 1);
+          renderModalCoffeesContainer(containerEl);
+        });
+      });
+    };
 
     showModal({
-      title: 'Iniciar Compra de Café (Novo Pedido)',
+      title: 'Iniciar Compra Coletiva (Novo Lote)',
       bodyHtml: `
         <form id="modalCreateForm" style="margin-top:0;">
           <div class="form-group">
             <label for="orderTitle">Nome / Identificação da Compra Coletiva</label>
             <input type="text" id="orderTitle" placeholder="Ex: Compra Coletiva #15 - Lote de Primavera" required />
-          </div>
-          <div class="form-group">
-            <label for="orderSupplier">Fornecedor / Torrefação</label>
-            <input type="text" id="orderSupplier" list="supplierDatalist" placeholder="Ex: Torrefação Moka Club" required />
-            <datalist id="supplierDatalist">
-              ${uniqueSuppliers.map(s => `<option value="${s}"></option>`).join('')}
-            </datalist>
-          </div>
-          <div class="form-group">
-            <label for="orderSourceProduct">Importar oferta de fornecedor parceiro (opcional)</label>
-            <select id="orderSourceProduct" style="padding:0.5rem; font-size:0.85rem; border-radius:6px;">
-              <option value="">-- Cadastrar Manualmente --</option>
-              ${appState.products.map(p => `
-                <option value="${p.id}" data-price="${p.pricePerKg}" data-deadline="${p.deadline}">${p.name} (R$ ${Number(p.pricePerKg).toFixed(2)}/kg)</option>
-              `).join('')}
-            </select>
-          </div>
-          <div class="form-group">
-            <label for="orderType">Variedade do Café / Produtor / Região</label>
-            <input type="text" id="orderType" list="coffeeTypeDatalist" placeholder="Ex: Catuaí Vermelho - Sítio São João" required />
-            <datalist id="coffeeTypeDatalist">
-              ${(appState.supplierHistory || []).map(sh => `<option value="${sh.coffeeType}">${sh.supplierName} - R$ ${Number(sh.lastPricePerKg).toFixed(2)}/kg</option>`).join('')}
-            </datalist>
-          </div>
-          <div class="form-group">
-            <label for="orderPrice">Valor do Quilo (R$)</label>
-            <input type="number" id="orderPrice" min="0.01" step="0.01" placeholder="Ex: 80.00" required />
-          </div>
-          <div class="form-group">
-            <label for="orderNotes">Perfil Sensorial / Características (opcional)</label>
-            <input type="text" id="orderNotes" placeholder="Ex: Acidez citrica, notas de caramelo e chocolate, 84 pontos" />
           </div>
           <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
             <div class="form-group">
@@ -4268,69 +4368,87 @@ function bindAdminEvents() {
             <label for="orderDeadline">Data Limite de Pedidos</label>
             <input type="date" id="orderDeadline" required />
           </div>
+
+          <hr style="border:0; border-top:1px solid var(--border); margin:1rem 0;" />
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+            <strong style="font-size:0.85rem; color:var(--accent-strong);">☕ Cafés Inclusos nesta Compra Coletiva</strong>
+            <button type="button" id="addMoreCoffeeBtn" class="secondary" style="font-size:0.75rem; padding:0.35rem 0.7rem; cursor:pointer;">+ Adicionar Outro Café</button>
+          </div>
+
+          <div id="modalCoffeesContainer"></div>
+
+          <datalist id="supplierDatalist">
+            ${uniqueSuppliers.map(s => `<option value="${s}"></option>`).join('')}
+          </datalist>
+          <datalist id="coffeeTypeDatalist">
+            ${(appState.supplierHistory || []).map(sh => `<option value="${sh.coffeeType}">${sh.supplierName} - R$ ${Number(sh.lastPricePerKg).toFixed(2)}/kg</option>`).join('')}
+          </datalist>
         </form>
       `,
-      confirmText: 'Lançar Pedido',
+      confirmText: 'Lançar Compra Coletiva',
       onShow: (modalEl) => {
-        const supplierInput = modalEl.querySelector('#orderSupplier');
-        const typeInput = modalEl.querySelector('#orderType');
-        const priceInput = modalEl.querySelector('#orderPrice');
-        const notesInput = modalEl.querySelector('#orderNotes');
+        const container = modalEl.querySelector('#modalCoffeesContainer');
+        renderModalCoffeesContainer(container);
 
-        // Auto-fill price and notes if user selects an existing coffee type from history
-        const checkAutoFill = () => {
-          const sVal = supplierInput?.value.trim().toLowerCase();
-          const tVal = typeInput?.value.trim().toLowerCase();
-          if (!tVal) return;
-
-          const match = (appState.supplierHistory || []).find(sh =>
-            (!sVal || sh.supplierName.toLowerCase() === sVal) &&
-            sh.coffeeType.toLowerCase() === tVal
-          );
-
-          if (match) {
-            if (match.lastPricePerKg && !priceInput.value) priceInput.value = match.lastPricePerKg;
-            if (match.notes && !notesInput.value) notesInput.value = match.notes;
-            if (match.supplierName && !supplierInput.value) supplierInput.value = match.supplierName;
-          }
-        };
-
-        typeInput?.addEventListener('change', checkAutoFill);
-        supplierInput?.addEventListener('change', checkAutoFill);
-
-        modalEl.querySelector('#orderSourceProduct')?.addEventListener('change', (e) => {
-          const select = e.target;
-          const selectedOption = select.options[select.selectedIndex];
-          const deadlineInput = modalEl.querySelector('#orderDeadline');
-
-          if (select.value) {
-            typeInput.value = selectedOption.text.split(' (R$')[0];
-            priceInput.value = selectedOption.getAttribute('data-price');
-            deadlineInput.value = selectedOption.getAttribute('data-deadline');
-          }
+        modalEl.querySelector('#addMoreCoffeeBtn')?.addEventListener('click', () => {
+          modalCoffees = Array.from(container.querySelectorAll('.modal-coffee-block')).map(block => ({
+            supplierName: block.querySelector('.coffee-supplier-input').value.trim(),
+            type: block.querySelector('.coffee-type-input').value.trim(),
+            pricePerKg: block.querySelector('.coffee-price-input').value,
+            notes: block.querySelector('.coffee-notes-input').value.trim()
+          }));
+          modalCoffees.push({ supplierName: '', type: '', pricePerKg: '', notes: '' });
+          renderModalCoffeesContainer(container);
         });
       },
       onConfirm: async (modalEl) => {
         const title = modalEl.querySelector('#orderTitle').value.trim();
-        const supplierName = modalEl.querySelector('#orderSupplier').value.trim();
-        const type = modalEl.querySelector('#orderType').value.trim();
-        const pricePerKg = Number(modalEl.querySelector('#orderPrice').value);
-        const notes = modalEl.querySelector('#orderNotes').value.trim();
         const deadline = modalEl.querySelector('#orderDeadline').value;
         const freightCost = Number(modalEl.querySelector('#orderFreightCost').value || 0);
         const freightType = modalEl.querySelector('#orderFreightType').value;
 
-        if (!title || !supplierName || !type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
-          showToast('Preencha os dados de forma correta (Nome, Fornecedor, Café, Valor e Data Limite).', 'warning');
+        if (!title || !deadline) {
+          showToast('Informe o Nome da Compra e a Data Limite.', 'warning');
           return false;
         }
 
+        const coffeeBlocks = Array.from(modalEl.querySelectorAll('.modal-coffee-block'));
+        const coffees = [];
+
+        for (let i = 0; i < coffeeBlocks.length; i++) {
+          const block = coffeeBlocks[i];
+          const supplierName = block.querySelector('.coffee-supplier-input').value.trim();
+          const type = block.querySelector('.coffee-type-input').value.trim();
+          const pricePerKg = Number(block.querySelector('.coffee-price-input').value);
+          const notes = block.querySelector('.coffee-notes-input').value.trim();
+
+          if (!supplierName || !type || isNaN(pricePerKg) || pricePerKg <= 0) {
+            showToast(`Preencha os dados do Café #${i + 1} de forma correta (Fornecedor, Café e Valor).`, 'warning');
+            return false;
+          }
+
+          coffees.push({
+            id: `c_${Date.now()}_${i}`,
+            supplierName,
+            type,
+            pricePerKg,
+            notes
+          });
+        }
+
+        if (coffees.length === 0) {
+          showToast('Adicione ao menos 1 café nesta compra.', 'warning');
+          return false;
+        }
+
+        const primaryCoffee = coffees[0];
         const newOrder = {
           title,
-          supplierName,
-          type,
-          pricePerKg,
-          notes,
+          supplierName: primaryCoffee.supplierName,
+          type: primaryCoffee.type,
+          pricePerKg: primaryCoffee.pricePerKg,
+          notes: primaryCoffee.notes,
+          coffees,
           freightCost,
           freightType,
           openingDate: new Date().toISOString().slice(0, 10),
@@ -4350,18 +4468,19 @@ function bindAdminEvents() {
             saveLocalData();
             triggerSystemNotification(
               `Nova Compra Coletiva no grupo ${appState.group.name}!`,
-              `${title} (${supplierName} - ${type}) por R$ ${pricePerKg.toFixed(2)}/kg. Participe até ${deadline}!`
+              `${title} com ${coffees.length} café(s) disponível(eis). Participe até ${deadline}!`
             );
           }
 
-          // Save/Update in supplier history
-          await saveSupplierHistoryRecord({
-            groupId: appState.profile.groupId,
-            supplierName,
-            coffeeType: type,
-            pricePerKg,
-            notes
-          });
+          for (const c of coffees) {
+            await saveSupplierHistoryRecord({
+              groupId: appState.profile.groupId,
+              supplierName: c.supplierName,
+              coffeeType: c.type,
+              pricePerKg: c.pricePerKg,
+              notes: c.notes
+            });
+          }
 
           showToast('Nova compra coletiva iniciada!');
           render();
@@ -4388,33 +4507,36 @@ function bindAdminEvents() {
       if (!order) return;
 
       const uniqueSuppliers = Array.from(new Set((appState.supplierHistory || []).map(sh => sh.supplierName)));
+      let modalCoffees = getOrderCoffees(order);
+
+      const renderModalCoffeesContainer = (containerEl) => {
+        containerEl.innerHTML = renderModalCoffeeBlocks(modalCoffees, uniqueSuppliers);
+        bindBlockRemoveEvents(containerEl);
+      };
+
+      const bindBlockRemoveEvents = (containerEl) => {
+        containerEl.querySelectorAll('.remove-coffee-block-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const idx = Number(btn.getAttribute('data-index'));
+            modalCoffees = Array.from(containerEl.querySelectorAll('.modal-coffee-block')).map(block => ({
+              supplierName: block.querySelector('.coffee-supplier-input').value.trim(),
+              type: block.querySelector('.coffee-type-input').value.trim(),
+              pricePerKg: block.querySelector('.coffee-price-input').value,
+              notes: block.querySelector('.coffee-notes-input').value.trim()
+            }));
+            modalCoffees.splice(idx, 1);
+            renderModalCoffeesContainer(containerEl);
+          });
+        });
+      };
 
       showModal({
-        title: 'Configurações da Compra Coletiva',
+        title: 'Editar Compra Coletiva & Gerenciar Cafés',
         bodyHtml: `
           <form id="modalEditForm" style="margin-top:0;">
             <div class="form-group">
               <label for="editTitle">Nome / Identificação da Compra Coletiva</label>
               <input type="text" id="editTitle" value="${order.title || order.type}" placeholder="Ex: Compra Coletiva #15 - Lote de Primavera" required />
-            </div>
-            <div class="form-group">
-              <label for="editSupplier">Fornecedor / Torrefação</label>
-              <input type="text" id="editSupplier" list="editSupplierDatalist" value="${order.supplierName || ''}" placeholder="Ex: Torrefação Moka Club" required />
-              <datalist id="editSupplierDatalist">
-                ${uniqueSuppliers.map(s => `<option value="${s}"></option>`).join('')}
-              </datalist>
-            </div>
-            <div class="form-group">
-              <label for="editType">Variedade do Café / Produtor</label>
-              <input type="text" id="editType" value="${order.type}" required />
-            </div>
-            <div class="form-group">
-              <label for="editPrice">Valor do Quilo (R$)</label>
-              <input type="number" id="editPrice" min="0.01" step="0.01" value="${order.pricePerKg}" required />
-            </div>
-            <div class="form-group">
-              <label for="editNotes">Perfil Sensorial / Características</label>
-              <input type="text" id="editNotes" value="${order.notes || ''}" placeholder="Ex: Acidez citrica, notas de caramelo" />
             </div>
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
               <div class="form-group">
@@ -4431,7 +4553,7 @@ function bindAdminEvents() {
               </div>
             </div>
             <div class="form-group">
-              <label for="editDeadline">Data Limite</label>
+              <label for="editDeadline">Data Limite de Pedidos</label>
               <input type="date" id="editDeadline" value="${order.deadline}" required />
             </div>
             <div class="form-group">
@@ -4445,41 +4567,112 @@ function bindAdminEvents() {
                 <option value="cancelado" ${order.status === 'cancelado' ? 'selected' : ''}>Cancelado</option>
               </select>
             </div>
+
+            <hr style="border:0; border-top:1px solid var(--border); margin:1rem 0;" />
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+              <strong style="font-size:0.85rem; color:var(--accent-strong);">☕ Cafés Inclusos nesta Compra Coletiva</strong>
+              <button type="button" id="addMoreCoffeeEditBtn" class="secondary" style="font-size:0.75rem; padding:0.35rem 0.7rem; cursor:pointer;">+ Adicionar Novo Café</button>
+            </div>
+
+            <div id="modalEditCoffeesContainer"></div>
+
+            <datalist id="supplierDatalist">
+              ${uniqueSuppliers.map(s => `<option value="${s}"></option>`).join('')}
+            </datalist>
+            <datalist id="coffeeTypeDatalist">
+              ${(appState.supplierHistory || []).map(sh => `<option value="${sh.coffeeType}">${sh.supplierName} - R$ ${Number(sh.lastPricePerKg).toFixed(2)}/kg</option>`).join('')}
+            </datalist>
           </form>
         `,
-        confirmText: 'Salvar Configurações',
+        confirmText: 'Salvar Alterações',
+        onShow: (modalEl) => {
+          const container = modalEl.querySelector('#modalEditCoffeesContainer');
+          renderModalCoffeesContainer(container);
+
+          modalEl.querySelector('#addMoreCoffeeEditBtn')?.addEventListener('click', () => {
+            modalCoffees = Array.from(container.querySelectorAll('.modal-coffee-block')).map(block => ({
+              supplierName: block.querySelector('.coffee-supplier-input').value.trim(),
+              type: block.querySelector('.coffee-type-input').value.trim(),
+              pricePerKg: block.querySelector('.coffee-price-input').value,
+              notes: block.querySelector('.coffee-notes-input').value.trim()
+            }));
+            modalCoffees.push({ supplierName: '', type: '', pricePerKg: '', notes: '' });
+            renderModalCoffeesContainer(container);
+          });
+        },
         onConfirm: async (modalEl) => {
           const title = modalEl.querySelector('#editTitle').value.trim();
-          const supplierName = modalEl.querySelector('#editSupplier').value.trim();
-          const type = modalEl.querySelector('#editType').value.trim();
-          const pricePerKg = Number(modalEl.querySelector('#editPrice').value);
-          const notes = modalEl.querySelector('#editNotes').value.trim();
           const deadline = modalEl.querySelector('#editDeadline').value;
           const status = modalEl.querySelector('#editStatus').value;
           const freightCost = Number(modalEl.querySelector('#editFreightCost').value || 0);
           const freightType = modalEl.querySelector('#editFreightType').value;
 
-          if (!title || !supplierName || !type || isNaN(pricePerKg) || pricePerKg <= 0 || !deadline) {
-            showToast('Dados inválidos para atualizar o pedido.', 'warning');
+          if (!title || !deadline) {
+            showToast('Informe o Nome da Compra e a Data Limite.', 'warning');
             return false;
           }
 
-          try {
-            if (appState.firebaseMode) {
-              await window.firebase.firestore().collection('orders').doc(orderId).update({ title, supplierName, type, pricePerKg, notes, freightCost, freightType, deadline, status });
-              await loadFirebaseData(appState.user.uid);
-            } else {
-              appState.orders = appState.orders.map((o) => o.id === orderId ? { ...o, title, supplierName, type, pricePerKg, notes, freightCost, freightType, deadline, status } : o);
-              saveLocalData();
+          const coffeeBlocks = Array.from(modalEl.querySelectorAll('.modal-coffee-block'));
+          const coffees = [];
+
+          for (let i = 0; i < coffeeBlocks.length; i++) {
+            const block = coffeeBlocks[i];
+            const supplierName = block.querySelector('.coffee-supplier-input').value.trim();
+            const type = block.querySelector('.coffee-type-input').value.trim();
+            const pricePerKg = Number(block.querySelector('.coffee-price-input').value);
+            const notes = block.querySelector('.coffee-notes-input').value.trim();
+
+            if (!supplierName || !type || isNaN(pricePerKg) || pricePerKg <= 0) {
+              showToast(`Preencha os dados do Café #${i + 1} de forma correta.`, 'warning');
+              return false;
             }
 
-            await saveSupplierHistoryRecord({
-              groupId: appState.profile.groupId,
+            coffees.push({
+              id: `c_${Date.now()}_${i}`,
               supplierName,
-              coffeeType: type,
+              type,
               pricePerKg,
               notes
             });
+          }
+
+          if (coffees.length === 0) {
+            showToast('A compra coletiva deve conter ao menos 1 café.', 'warning');
+            return false;
+          }
+
+          const primaryCoffee = coffees[0];
+          const updatedOrder = {
+            title,
+            supplierName: primaryCoffee.supplierName,
+            type: primaryCoffee.type,
+            pricePerKg: primaryCoffee.pricePerKg,
+            notes: primaryCoffee.notes,
+            coffees,
+            freightCost,
+            freightType,
+            deadline,
+            status
+          };
+
+          try {
+            if (appState.firebaseMode) {
+              await window.firebase.firestore().collection('orders').doc(orderId).update(updatedOrder);
+              await loadFirebaseData(appState.user.uid);
+            } else {
+              appState.orders = appState.orders.map((o) => o.id === orderId ? { ...o, ...updatedOrder } : o);
+              saveLocalData();
+            }
+
+            for (const c of coffees) {
+              await saveSupplierHistoryRecord({
+                groupId: appState.profile.groupId,
+                supplierName: c.supplierName,
+                coffeeType: c.type,
+                pricePerKg: c.pricePerKg,
+                notes: c.notes
+              });
+            }
 
             showToast('Compra coletiva atualizada!');
             render();
