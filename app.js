@@ -1010,6 +1010,115 @@ function renderCollectiveGoalWidget() {
   `;
 }
 
+function renderTopRatedCoffeesSpotlight() {
+  const topRatedList = [
+    {
+      id: 'top_1',
+      name: 'Geisha Especial Vale do Caparaó',
+      roastery: 'Sítio Alto Caparaó',
+      origin: 'Caparaó • 1.450m',
+      scaScore: '91.0 SCA',
+      ratingStars: '5.0 ★★★★★',
+      ratingCount: 14,
+      aromaNotes: ['🍒 Pêssego & Bergamota', '🍯 Mel de Florada', '🌸 Floral Intenso'],
+      pricePerKg: 110.00,
+      badgeText: '🏆 Nº 1 em Avaliações',
+      topQuote: '“Aroma floral inebriante na moagem. Na xícara, acidez brilhante de pêssego!” — Mariana L.'
+    },
+    {
+      id: 'top_2',
+      name: 'Catuaí Vermelho Fermentado',
+      roastery: 'Sítio São José',
+      origin: 'Alta Mogiana • 1.250m',
+      scaScore: '89.5 SCA',
+      ratingStars: '4.9 ★★★★★',
+      ratingCount: 22,
+      aromaNotes: ['🍫 Cacau 70%', '🍇 Frutas Negras', 'Caramelo Tostado'],
+      pricePerKg: 68.00,
+      badgeText: '⭐ Favorito do Lote',
+      topQuote: '“Corpo aveludado espetacular no espresso e notas marcantes de chocolate amargo.” — Carlos M.'
+    },
+    {
+      id: 'top_3',
+      name: 'Bourbon Amarelo Sol de Minas',
+      roastery: 'Fazenda Primavera',
+      origin: 'Cerrado Mineiro • 1.180m',
+      scaScore: '88.0 SCA',
+      ratingStars: '4.8 ★★★★☆',
+      ratingCount: 19,
+      aromaNotes: ['🍯 Rapadura & Mel', '🌰 Avelã Torrada', '🍋 Acidez Suave'],
+      pricePerKg: 72.00,
+      badgeText: '🔥 Alta Demanda',
+      topQuote: '“Doçura natural absurda! Praticamente dispensa qualquer adoçante.” — Fernando K.'
+    }
+  ];
+
+  return `
+    <section class="top-rated-spotlight-card">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.75rem; border-bottom:1px solid rgba(226,147,57,0.25); padding-bottom:0.85rem;">
+        <div>
+          <span class="eyebrow" style="color:var(--accent-strong); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; display:flex; align-items:center; gap:0.4rem;">
+            ☕ Seleção de Elite &bull; Avaliado pela Comunidade
+          </span>
+          <h2 style="font-family:'Playfair Display', serif; font-size:1.6rem; margin-top:0.2rem; color:var(--text);">
+            Cafés Mais Bem Avaliados do Clube
+          </h2>
+          <p style="font-size:0.85rem; color:var(--muted); margin-top:0.15rem;">
+            Grãos premiados com pontuação 88+ SCA e notas máximas nas degustações dos membros.
+          </p>
+        </div>
+        <span class="sca-pill" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+          ⭐ Média do Clube: 4.9 / 5.0
+        </span>
+      </div>
+
+      <div class="top-rated-grid">
+        ${topRatedList.map((item, idx) => `
+          <div class="top-rated-card ${idx === 0 ? 'featured-top' : ''}">
+            <div>
+              <span class="top-badge-rank">${item.badgeText}</span>
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-top:0.6rem;">
+                <div>
+                  <h3 style="font-size:1.05rem; font-family:'Playfair Display', serif; font-weight:700; color:var(--text); margin-bottom:0.15rem;">
+                    ${item.name}
+                  </h3>
+                  <p style="font-size:0.75rem; color:var(--muted); display:flex; align-items:center; gap:0.3rem;">
+                    <span>🏬 ${item.roastery}</span> &bull; <span>${item.origin}</span>
+                  </p>
+                </div>
+                <span class="sca-pill">${item.scaScore}</span>
+              </div>
+
+              <div style="margin-top:0.75rem; display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                <span style="color:var(--accent-strong); font-weight:700; font-size:0.82rem;">${item.ratingStars}</span>
+                <span style="color:var(--muted); font-size:0.72rem;">(${item.ratingCount} avaliações)</span>
+              </div>
+
+              <div style="display:flex; flex-wrap:wrap; gap:0.35rem; margin-top:0.65rem;">
+                ${item.aromaNotes.map(n => `<span class="sensory-flavor-pill">${n}</span>`).join('')}
+              </div>
+
+              <div class="member-review-quote">
+                ${item.topQuote}
+              </div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(226,147,57,0.18); padding-top:0.85rem; margin-top:0.6rem;">
+              <div>
+                <span style="font-size:0.68rem; color:var(--muted); text-transform:uppercase; display:block;">Cota Especial</span>
+                <strong style="font-size:1.15rem; color:var(--accent-strong);" class="tabular-num">R$ ${item.pricePerKg.toFixed(2)}/kg</strong>
+              </div>
+              <button type="button" class="primary quick-order-top-rated-btn" data-coffee-name="${item.name}" data-price="${item.pricePerKg}" style="font-size:0.78rem; padding:0.45rem 0.95rem;">
+                ☕ Garantir Cota
+              </button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
 function renderSensoryCatalogWidget() {
   const catalog = [
     {
@@ -1998,12 +2107,14 @@ function render() {
           ${(appState.activeRoleView === 'leader' || (appState.activeRoleView === 'auto' && isAdmin)) ? `
             ${renderCollectiveGoalWidget()}
             ${renderAdminOrdersSection()}
+            ${renderTopRatedCoffeesSpotlight()}
             ${renderAdminParticipationsSection()}
             ${renderUserOrdersSection()}
           ` : ''}
 
           ${(!appState.activeRoleView || appState.activeRoleView === 'buyer' || (appState.activeRoleView === 'auto' && !isAdmin && !isSupplier)) ? `
             ${renderCollectiveGoalWidget()}
+            ${renderTopRatedCoffeesSpotlight()}
             ${renderSensoryCatalogWidget()}
             ${renderUserOrdersSection()}
             ${renderUserParticipationsSection()}
@@ -4012,19 +4123,58 @@ function renderAdminOrdersSection() {
     `;
   };
 
+  const totalVolumeKg = appState.participations.reduce((sum, p) => sum + Number(p.quantityKg || 0), 0);
+  const totalPaidCount = appState.participations.filter(p => p.paymentStatus === 'pago').length;
+
   return `
+    <div class="leader-action-bar">
+      <div>
+        <span class="eyebrow" style="color:var(--accent-strong); font-size:0.75rem; text-transform:uppercase;">Hub do Líder de Grupo</span>
+        <h2 style="font-family:'Playfair Display', serif; font-size:1.5rem; color:var(--text); margin-top:0.15rem;">
+          Painel de Gestão de Compras & Membros
+        </h2>
+        <p style="font-size:0.83rem; color:var(--muted); margin-top:0.15rem;">
+          Inicie novas compras coletivas, monitore o atingimento de cotas e consolide pedidos para o fornecedor.
+        </p>
+      </div>
+
+      <div style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:center;">
+        <button id="viewSupplierHistoryBtn" class="secondary" style="font-size:0.8rem; padding:0.5rem 0.9rem;" title="Ver fornecedores e histórico de preços">
+          📜 Fornecedores
+        </button>
+        <button id="newOrderButton" class="primary" style="font-size:0.85rem; padding:0.55rem 1.15rem;">
+          ☕ + Iniciar Nova Compra Coletiva
+        </button>
+      </div>
+
+      <div class="leader-stats-grid">
+        <div class="leader-stat-box">
+          <span>Lotes Ativos</span>
+          <strong>${openOrders.length} em andamento</strong>
+        </div>
+        <div class="leader-stat-box">
+          <span>Volume Consolidado</span>
+          <strong>${totalVolumeKg.toFixed(1)} kg</strong>
+        </div>
+        <div class="leader-stat-box">
+          <span>Membros Inscritos</span>
+          <strong>${appState.participations.length} solicitações</strong>
+        </div>
+        <div class="leader-stat-box">
+          <span>Pagamentos Pix</span>
+          <strong>${totalPaidCount} de ${appState.participations.length} confirmados</strong>
+        </div>
+      </div>
+    </div>
+
     <section class="card">
       <div class="section-title" style="flex-wrap:wrap; gap:0.5rem;">
-        <h2>Compras Coletivas (Líder)</h2>
-        <div>
-          <button id="viewSupplierHistoryBtn" class="secondary" style="font-size:0.8rem; padding:0.5rem 0.9rem; margin-right:0.5rem; cursor:pointer;" title="Ver fornecedores e histórico de preços">📜 Histórico Fornecedores</button>
-          <button id="newOrderButton" class="primary">+ Nova Compra Coletiva</button>
-        </div>
+        <h2>Lotes de Compras Coletivas Ativos</h2>
       </div>
       <div class="orders-container">
         ${openOrders.length === 0 ? `
           <p class="hint" style="color:var(--muted); font-size:0.9rem; text-align:center; padding:2rem 0;">
-            Nenhuma compra coletiva em andamento. Clique em "+ Nova Compra Coletiva" para iniciar o ciclo.
+            Nenhuma compra coletiva em andamento. Clique em "+ Nova Compra Coletiva" acima para iniciar o ciclo.
           </p>
         ` : openOrders.map(renderOrderCard).join('')}
       </div>
