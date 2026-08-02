@@ -29,6 +29,13 @@ const appState = {
   superRequests: [],
   supplierHistory: [],
   baristaChatHistory: [],
+
+  // Padrões do Novo Layout de Grupo (Marketplace / Cardápio Digital)
+  theme: localStorage.getItem('coffee_theme') || 'light',
+  selectedCategory: 'all',
+  cart: JSON.parse(localStorage.getItem('coffee_cart_1kg') || '[]'),
+  activeNavSection: 'menu',
+  expandedCardId: null
 };
 
 // Global real-time unsubscribers
@@ -1437,6 +1444,526 @@ function bindBaristaAiEvents() {
   });
 }
 
+// =============================================================================
+// FUNÇÕES DO NOVO LAYOUT DE GRUPO (MARKETPLACE & CARDÁPIO DIGITAL)
+// =============================================================================
+
+function applyTheme(theme) {
+  appState.theme = theme;
+  localStorage.setItem('coffee_theme', theme);
+  if (theme === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.body.classList.add('theme-dark');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    document.body.classList.remove('theme-dark');
+  }
+}
+
+function toggleTheme() {
+  const newTheme = appState.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(newTheme);
+  render();
+}
+
+// Executa aplicação imediata do tema salvo no localStorage
+applyTheme(appState.theme);
+
+function saveCart() {
+  localStorage.setItem('coffee_cart_1kg', JSON.stringify(appState.cart));
+}
+
+function getCoffeeCatalog() {
+  const dynamicCatalog = [];
+
+  // 1. Puxar cafés cadastrados pelos Líderes de Grupo nos lotes ativos
+  if (appState.orders && appState.orders.length > 0) {
+    appState.orders.forEach(order => {
+      const coffees = getOrderCoffees(order);
+      coffees.forEach((c, idx) => {
+        dynamicCatalog.push({
+          id: c.id || `order_coffee_${order.id}_${idx}`,
+          orderId: order.id,
+          title: c.type || c.title || order.title || 'Café Especial do Lote',
+          category: 'collective',
+          origin: c.origin || 'Fazenda Selecionada',
+          score: c.score ? (c.score.includes('SCA') ? c.score : `${c.score} SCA`) : '88.0 SCA',
+          roast: c.roast || 'Torra Artesanal Fresca',
+          description: c.notes || c.description || 'Grão especial selecionado para o lote de compra coletiva.',
+          notes: Array.isArray(c.notesList) ? c.notesList : (c.notes ? c.notes.split(',').map(n => n.trim()) : ['Especial', 'Torra Fresca']),
+          pricePerKg: Number(c.pricePerKg || c.price) || 65.00,
+          photo: c.photo || c.image || 'assets/coffee-hero.svg',
+          isCollectiveOpen: order.status === 'aberto',
+          collectiveLotGoalKg: Number(order.targetKg || 50),
+          collectiveLotCurrentKg: Number(order.currentKg || 0)
+        });
+      });
+    });
+  }
+
+  // 2. Puxar cafés cadastrados por Fornecedores e Produtores
+  if (appState.products && appState.products.length > 0) {
+    appState.products.forEach((p, idx) => {
+      dynamicCatalog.push({
+        id: p.id || `supplier_prod_${idx}`,
+        title: p.name || p.title,
+        category: p.category || 'collective',
+        origin: p.origin || 'Fazenda Parceira',
+        score: p.score ? `${p.score} SCA` : '88.5 SCA',
+        roast: p.roast || 'Torra Média',
+        description: p.description || 'Grão especial cadastrado diretamente pelo fornecedor/produtor.',
+        notes: Array.isArray(p.notes) ? p.notes : (typeof p.notes === 'string' ? p.notes.split(',').map(n => n.trim()) : ['Cacau', 'Caramelo']),
+        pricePerKg: Number(p.price) || 70,
+        photo: p.image || p.photo || 'assets/coffee-hero.svg',
+        isCollectiveOpen: true,
+        collectiveLotGoalKg: 40,
+        collectiveLotCurrentKg: 20
+      });
+    });
+  }
+
+  return dynamicCatalog;
+}
+
+function addToCart1kg(coffeeId) {
+  const coffee = getCoffeeCatalog().find(c => c.id === coffeeId || c.title === coffeeId);
+  if (!coffee) return;
+
+  const existing = appState.cart.find(item => item.coffeeId === coffee.id);
+  if (existing) {
+    existing.packagesKg += 1;
+  } else {
+    appState.cart.push({
+      coffeeId: coffee.id,
+      title: coffee.title,
+      pricePerKg: coffee.pricePerKg,
+      packagesKg: 1, // Pacotes de 1kg conforme solicitado pelo usuário
+      photo: coffee.photo
+    });
+  }
+  saveCart();
+  showToast(`+1kg de "${coffee.title}" adicionado ao carrinho!`, 'success');
+  render();
+}
+
+function updateCartQuantity(coffeeId, delta) {
+  const item = appState.cart.find(i => i.coffeeId === coffeeId);
+  if (item) {
+    item.packagesKg += delta;
+    if (item.packagesKg <= 0) {
+      removeFromCart(coffeeId);
+      return;
+    }
+  }
+  saveCart();
+  render();
+}
+
+function removeFromCart(coffeeId) {
+  appState.cart = appState.cart.filter(item => item.coffeeId !== coffeeId);
+  saveCart();
+  showToast('Item removido do carrinho');
+  render();
+}
+
+function showAddCoffeeModal() {
+  showModal({
+    title: '☕ Cadastrar Novo Tipo de Café no Lote',
+    body: `
+      <form id="leaderAddCoffeeForm" style="display:flex; flex-direction:column; gap:0.85rem;">
+        <div>
+          <label style="font-size:0.8rem; font-weight:700; color:var(--text); display:block; margin-bottom:0.25rem;">Variedade / Nome do Café *</label>
+          <input type="text" id="newCoffeeTitle" placeholder="Ex: Catuaí Vermelho Sítio São José" required style="width:100%; padding:0.5rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text);" />
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+          <div>
+            <label style="font-size:0.8rem; font-weight:700; color:var(--text); display:block; margin-bottom:0.25rem;">Preço por Kg (R$) *</label>
+            <input type="number" step="0.50" id="newCoffeePrice" placeholder="65.00" required style="width:100%; padding:0.5rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text);" />
+          </div>
+          <div>
+            <label style="font-size:0.8rem; font-weight:700; color:var(--text); display:block; margin-bottom:0.25rem;">Pontuação SCA</label>
+            <input type="text" id="newCoffeeSca" placeholder="88.5 SCA" style="width:100%; padding:0.5rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text);" />
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+          <div>
+            <label style="font-size:0.8rem; font-weight:700; color:var(--text); display:block; margin-bottom:0.25rem;">Origem & Altitude</label>
+            <input type="text" id="newCoffeeOrigin" placeholder="Alta Mogiana (1.200m)" style="width:100%; padding:0.5rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text);" />
+          </div>
+          <div>
+            <label style="font-size:0.8rem; font-weight:700; color:var(--text); display:block; margin-bottom:0.25rem;">Perfil de Torra</label>
+            <select id="newCoffeeRoast" style="width:100%; padding:0.5rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text);">
+              <option value="Torra Média Clássica">Torra Média Clássica</option>
+              <option value="Torra Clara Filtrado">Torra Clara Filtrado</option>
+              <option value="Torra Escura Espresso">Torra Escura Espresso</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label style="font-size:0.8rem; font-weight:700; color:var(--text); display:block; margin-bottom:0.25rem;">Notas Sensoriais (separadas por vírgula)</label>
+          <input type="text" id="newCoffeeNotes" placeholder="Caramelo, Chocolate Amargo, Acidez Cítrica" style="width:100%; padding:0.5rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text);" />
+        </div>
+
+        <div>
+          <label style="font-size:0.8rem; font-weight:700; color:var(--text); display:block; margin-bottom:0.25rem;">Descrição / Detalhes</label>
+          <textarea id="newCoffeeDesc" rows="2" placeholder="Descreva os atributos de sabor e processo..." style="width:100%; padding:0.5rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text);"></textarea>
+        </div>
+      </form>
+    `,
+    confirmText: 'Salvar Café no Lote ☕',
+    cancelText: 'Cancelar',
+    onConfirm: async () => {
+      const title = document.getElementById('newCoffeeTitle')?.value.trim();
+      const price = parseFloat(document.getElementById('newCoffeePrice')?.value || '0');
+      if (!title || !price) {
+        showToast('Preencha o nome e preço do café!', 'error');
+        return;
+      }
+
+      const sca = document.getElementById('newCoffeeSca')?.value.trim() || '88.0 SCA';
+      const origin = document.getElementById('newCoffeeOrigin')?.value.trim() || 'Fazenda Selecionada';
+      const roast = document.getElementById('newCoffeeRoast')?.value || 'Torra Média Clássica';
+      const notesRaw = document.getElementById('newCoffeeNotes')?.value.trim() || 'Especial';
+      const desc = document.getElementById('newCoffeeDesc')?.value.trim() || 'Café especial cadastrado para a compra coletiva.';
+
+      const newCoffee = {
+        id: `leader_coffee_${Date.now()}`,
+        type: title,
+        title,
+        pricePerKg: price,
+        score: sca,
+        origin,
+        roast,
+        notes: notesRaw,
+        notesList: notesRaw.split(',').map(n => n.trim()),
+        description: desc,
+        photo: 'assets/coffee-hero.svg'
+      };
+
+      if (appState.orders.length === 0) {
+        const newOrder = {
+          id: `order_${Date.now()}`,
+          groupId: appState.group?.id || 'default_group',
+          title: `Lote de Compra Coletiva — ${appState.group?.name || 'Moema'}`,
+          status: 'aberto',
+          deadline: '30/08/2026',
+          targetKg: 50,
+          currentKg: 0,
+          coffees: [newCoffee]
+        };
+        appState.orders.push(newOrder);
+      } else {
+        const activeOrder = appState.orders.find(o => o.status === 'aberto') || appState.orders[0];
+        if (!activeOrder.coffees) activeOrder.coffees = [];
+        activeOrder.coffees.push(newCoffee);
+      }
+
+      if (!appState.firebaseMode) {
+        saveLocalData();
+      } else if (db && appState.group?.id) {
+        const activeOrder = appState.orders.find(o => o.status === 'aberto');
+        if (activeOrder && activeOrder.id) {
+          await db.collection('groups').doc(appState.group.id)
+            .collection('orders').doc(activeOrder.id)
+            .update({ coffees: activeOrder.coffees });
+        }
+      }
+
+      showToast(`☕ Café "${title}" cadastrado com sucesso no lote!`, 'success');
+      render();
+    }
+  });
+}
+
+function renderSidebarWrapper() {
+  const role = appState.profile?.role || 'user';
+  const isLeader = role === 'admin' || isPlatformAdmin();
+  const isSupplier = role === 'supplier';
+  const activeSection = appState.activeNavSection || 'menu';
+
+  let navItems = [];
+
+  if (appState.activeRoleView === 'supplier' || (!appState.activeRoleView && isSupplier)) {
+    navItems = [
+      { id: 'supplier_dashboard', label: 'Painel do Fornecedor', icon: '📈' },
+      { id: 'menu', label: 'Meu Catálogo & Ofertas', icon: '☕' },
+      { id: 'roast_status', label: 'Status de Torra & Envio', icon: '♨️' },
+      { id: 'payouts', label: 'Faturamento & Repasses', icon: '💰' },
+      { id: 'barista_ai', label: 'Assistente Barista IA', icon: '🤖' }
+    ];
+  } else if (appState.activeRoleView === 'leader' || (!appState.activeRoleView && isLeader)) {
+    navItems = [
+      { id: 'group_panel', label: 'Painel do Grupo', icon: '📊' },
+      { id: 'menu', label: 'Marketplace & Cardápio', icon: '🛒' },
+      { id: 'open_lots', label: 'Gestão de Lotes & Metas', icon: '🎯' },
+      { id: 'my_orders', label: 'Rateio de Frete & Pedidos', icon: '🚚' },
+      { id: 'my_group', label: 'Membros & Retirada', icon: '👥' },
+      { id: 'barista_ai', label: 'Assistente Barista IA', icon: '🤖' }
+    ];
+  } else if (appState.currentView === 'super_admin') {
+    navItems = [
+      { id: 'platform_admin', label: 'Painel da Plataforma', icon: '🛡️' },
+      { id: 'menu', label: 'Marketplace Geral', icon: '🛒' },
+      { id: 'super_suppliers', label: 'Gestão de Fornecedores', icon: '🏬' },
+      { id: 'super_metrics', label: 'Métricas & Faturamento', icon: '📈' },
+      { id: 'barista_ai', label: 'Assistente Barista IA', icon: '🤖' }
+    ];
+  } else {
+    // Membro (Comprador)
+    navItems = [
+      { id: 'menu', label: 'Cardápio & Marketplace', icon: '🛒' },
+      { id: 'open_lots', label: 'Compras Coletivas Abertas', icon: '🤝' },
+      { id: 'my_orders', label: 'Meus Pedidos & Cotas (1kg)', icon: '📦' },
+      { id: 'my_group', label: 'Meu Grupo Local', icon: '👥' },
+      { id: 'barista_ai', label: 'Assistente Barista IA', icon: '🤖' }
+    ];
+  }
+
+  const roleTitleMap = {
+    user: 'Membro / Comprador',
+    admin: 'Líder de Grupo',
+    supplier: 'Fornecedor',
+    superadmin: 'Super Admin'
+  };
+
+  return `
+    <aside class="sidebar-wrapper ${appState.mobileSidebarOpen ? 'mobile-open' : ''}" id="sidebarNav">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          ☕ Coffee Experience
+        </div>
+      </div>
+      <div style="padding:0.5rem 1.25rem;">
+        <span class="sidebar-role-badge">
+          ${roleTitleMap[role] || 'Participante'}
+        </span>
+      </div>
+
+      <ul class="sidebar-nav-list">
+        ${navItems.map(item => `
+          <li>
+            <a class="sidebar-nav-item ${activeSection === item.id ? 'active' : ''}" 
+               data-nav-section="${item.id}">
+              <span class="nav-icon">${item.icon}</span>
+              <span>${item.label}</span>
+            </a>
+          </li>
+        `).join('')}
+      </ul>
+
+      <div class="sidebar-footer">
+        <button id="sidebarLogoutBtn" class="secondary" style="font-size:0.8rem; padding:0.45rem; width:100%;">
+          🚪 Sair da Conta
+        </button>
+      </div>
+    </aside>
+  `;
+}
+
+function renderTopHeaderBar() {
+  const isDark = appState.theme === 'dark';
+
+  return `
+    <header class="top-header-bar">
+      <div style="display:flex; align-items:center; gap:0.75rem;">
+        <button id="toggleMobileSidebarBtn" class="secondary" style="font-size:1.1rem; padding:0.3rem 0.6rem;" title="Menu Navegação">
+          ☰
+        </button>
+      </div>
+
+      <!-- Logotipo Quadrado Central (Estilo ARVO da imagem anexa) -->
+      <div class="brand-square-logo" id="brandLogoBtn" title="Coffee Experience Marketplace">
+        ARVO
+      </div>
+
+      <div class="top-bar-actions">
+        ${renderRoleSwitcherNav()}
+
+        <button type="button" class="theme-toggle-btn" id="themeToggleBtn" title="Alternar Modo Claro / Modo Escuro">
+          ${isDark ? '🌙 Escuro' : '☀️ Claro'}
+        </button>
+
+        ${renderConnectionBadge()}
+      </div>
+    </header>
+  `;
+}
+
+function renderCategoryImageCardsCarousel() {
+  const categories = [
+    { id: 'all', title: 'Todos os Cafés', img: 'assets/coffee-hero.svg' },
+    { id: 'collective', title: 'Lotes Coletivos Abertos', img: 'assets/v60.png' },
+    { id: 'sca85', title: 'Grãos 85+ SCA', img: 'assets/espresso.png' },
+    { id: 'editions', title: 'Edições Limitadas', img: 'assets/aeropress.png' },
+    { id: 'kits', title: 'Kits & Acessórios', img: 'assets/french-press.png' }
+  ];
+
+  return `
+    <div class="category-card-carousel">
+      ${categories.map(cat => `
+        <div class="category-image-card ${appState.selectedCategory === cat.id ? 'active' : ''}" 
+             data-category="${cat.id}">
+          <img src="${cat.img}" alt="${cat.title}" />
+          <div class="category-image-card-overlay">
+            <span>${cat.title}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderTabStripBar() {
+  const tabs = [
+    { id: 'collective', label: 'Lotes Coletivos Abertos' },
+    { id: 'all', label: 'Cardápio Completo' },
+    { id: 'sca85', label: 'Grãos 85+ SCA' },
+    { id: 'editions', label: 'Edições Limitadas' }
+  ];
+
+  return `
+    <div class="tab-strip-bar">
+      ${tabs.map(tab => `
+        <button type="button" 
+                class="tab-strip-item ${appState.selectedCategory === tab.id ? 'active' : ''}" 
+                data-category="${tab.id}">
+          ${tab.label}
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderDigitalMenuCard(coffee) {
+  const isExpanded = appState.expandedCardId === coffee.id;
+
+  return `
+    <article class="digital-menu-card" id="card_${coffee.id}">
+      <div class="digital-menu-card-content">
+        <h3 class="digital-menu-card-title">${coffee.title}</h3>
+        <p class="digital-menu-card-desc">
+          ${coffee.origin} &bull; ${coffee.roast}
+        </p>
+        <div class="digital-menu-card-tags">
+          <span class="menu-tag sca">${coffee.score}</span>
+          ${(coffee.notes || []).map(n => `<span class="menu-tag">${n}</span>`).join('')}
+          ${coffee.isCollectiveOpen ? `
+            <span class="menu-tag" style="background:var(--accent-light); color:var(--accent); border-color:rgba(180,83,9,0.2); font-weight:700;">
+              Lote Aberto (${coffee.collectiveLotCurrentKg}/${coffee.collectiveLotGoalKg}kg)
+            </span>
+          ` : ''}
+        </div>
+
+        ${isExpanded ? `
+          <div style="font-size:0.85rem; color:var(--muted); line-height:1.5; background:var(--bg); padding:0.75rem; border-radius:var(--radius-sm); margin-bottom:0.75rem; border:1px solid var(--border);">
+            ${coffee.description}
+          </div>
+        ` : ''}
+
+        <div class="digital-menu-card-footer">
+          <div class="digital-menu-card-price">
+            R$ ${coffee.pricePerKg.toFixed(2)}<small>/ 1kg</small>
+          </div>
+
+          <button type="button" class="read-more-btn" data-toggle-expand="${coffee.id}">
+            ${isExpanded ? 'Ocultar ▲' : 'Saiba mais ∨'}
+          </button>
+
+          <button type="button" class="add-1kg-cart-btn" data-add-cart="${coffee.id}">
+            + 1kg ao Carrinho
+          </button>
+        </div>
+      </div>
+
+      <div class="digital-menu-card-img-wrapper">
+        <img src="${coffee.photo}" alt="${coffee.title}" class="digital-menu-card-img" />
+      </div>
+    </article>
+  `;
+}
+
+function renderDigitalMenuSection() {
+  const catalog = getCoffeeCatalog();
+  const filtered = appState.selectedCategory === 'all' 
+    ? catalog 
+    : catalog.filter(c => c.category === appState.selectedCategory || (appState.selectedCategory === 'collective' && c.isCollectiveOpen));
+
+  const groupName = appState.group ? appState.group.name : 'Coffee Experience';
+  const isLeader = appState.profile?.role === 'admin' || isPlatformAdmin();
+
+  return `
+    <section class="digital-menu-section" style="padding:0;">
+      <!-- Hero Cover Banner -->
+      <img src="assets/coffee-hero.svg" alt="Banner do Grupo" class="hero-cover-banner" />
+
+      <!-- Group Title Row (com Aa e Compartilhar conforme imagem de referência) -->
+      <div class="group-title-row">
+        <h1>${groupName}</h1>
+        <div class="group-title-actions">
+          <span title="Tamanho da Fonte (Aa)">Aa</span>
+          <span title="Compartilhar Lote" id="shareGroupBtn">🔗</span>
+        </div>
+      </div>
+
+      <!-- Carrossel Superior de Categorias com Fotos de Fundo -->
+      ${renderCategoryImageCardsCarousel()}
+
+      <!-- Barra de Abas com Indicador Ativo -->
+      ${renderTabStripBar()}
+
+      <!-- Cabeçalho da Categoria com Descrição e Leia Mais -->
+      <div class="category-intro-header">
+        <h2>${appState.selectedCategory === 'collective' ? 'Lotes de Compra Coletiva Aberta' : 'Seleção de Cafés'}</h2>
+        <p>Com grande entusiasmo, apresentamos nosso catálogo de microlotes com rateio proporcional de frete.</p>
+      </div>
+
+      <!-- Lista de Produtos ou Estado Vazio Sem Mocks da IA -->
+      <div class="digital-menu-list" style="padding: 1rem 1.5rem 2rem;">
+        ${filtered.length === 0 ? `
+          <div style="text-align:center; padding:3.5rem 1.5rem; background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md);">
+            <span style="font-size:3rem; display:block; margin-bottom:0.75rem;">☕</span>
+            <h3 style="font-size:1.2rem; font-weight:700; color:var(--text); margin-bottom:0.35rem;">Nenhum café cadastrado neste lote</h3>
+            <p style="font-size:0.88rem; color:var(--muted); max-width:480px; margin:0 auto 1.25rem; line-height:1.5;">
+              O Líder de Grupo pode cadastrar os tipos de café disponíveis para esta Compra Coletiva no Painel de Gestão.
+            </p>
+            ${isLeader ? `
+              <button type="button" class="primary" id="btnEmptyAddCoffee" style="font-size:0.88rem; padding:0.6rem 1.25rem;">
+                ☕ + Cadastrar Primeiro Café do Lote
+              </button>
+            ` : ''}
+          </div>
+        ` : filtered.map(coffee => renderDigitalMenuCard(coffee)).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderFloatingCartBar() {
+  if (!appState.cart || appState.cart.length === 0) return '';
+
+  const totalPackages = appState.cart.reduce((sum, item) => sum + item.packagesKg, 0);
+  const totalPrice = appState.cart.reduce((sum, item) => sum + (item.pricePerKg * item.packagesKg), 0);
+
+  return `
+    <div class="floating-cart-bar">
+      <div class="floating-cart-info">
+        <strong>🛒 ${totalPackages} Pacotes de 1kg no Carrinho</strong>
+        <span>Economia estimada de ~32% no frete coletivo rateado</span>
+      </div>
+
+      <div class="floating-cart-action">
+        <span class="floating-cart-price">R$ ${totalPrice.toFixed(2)}</span>
+        <button type="button" class="checkout-btn" id="openCartCheckoutBtn">
+          Ver Carrinho / Finalizar
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 
 function render() {
   const app = document.getElementById('app');
@@ -1537,6 +2064,10 @@ function render() {
               Entrar via SMS (Telefone)
             </button>
           </div>
+
+          <button id="guestExploreModeBtn" type="button" class="secondary" style="margin-top:0.75rem; width:100%; border:1px dashed var(--accent); color:var(--accent); font-weight:700; padding:0.6rem;">
+            ⚡ Entrar como Convidado (Explorar sem Login)
+          </button>
 
           <div id="phoneAuthSection" style="margin-top:1.25rem; display:none; flex-direction:column; gap:0.75rem; border-top:1px dashed var(--border); padding-top:1.25rem;">
             <div class="form-group">
@@ -1719,6 +2250,13 @@ function render() {
       } catch (error) {
         showToast(error.message || 'Código incorreto ou expirado.', 'error');
       }
+    });
+
+    document.getElementById('guestExploreModeBtn')?.addEventListener('click', () => {
+      appState.user = { uid: 'guest_' + Date.now(), email: 'visitante@coffee.app', displayName: 'Visitante' };
+      appState.profile = { name: 'Visitante Convidado', role: 'user', groupId: null };
+      showToast('Conectado no modo Convidado!');
+      render();
     });
 
     bindPromoCarouselEvents();
@@ -2063,6 +2601,7 @@ function render() {
   // 4. Main Dashboard View (associated with group)
   const role = appState.profile?.role || 'user';
   const isAdmin = role === 'admin';
+  const isSupplier = role === 'supplier';
   const ranking = buildConsumerRanking(appState.participations, appState.user.uid, appState.profile?.name || 'Você');
   
   const totalConsumed = appState.participations.reduce((sum, item) => sum + Number(item.quantityKg || 0), 0);
@@ -2071,190 +2610,115 @@ function render() {
   const pendingPaymentsCount = appState.participations.filter((p) => p.paymentStatus === 'pendente').length;
 
   app.innerHTML = `
-    <header class="header">
-      <div>
-        <p class="eyebrow">${isAdmin ? 'Gestão do Grupo (Admin)' : 'Painel do Consumidor'}</p>
-        <h1>Olá, ${appState.profile?.name || appState.user.displayName || appState.user.email}</h1>
-        ${renderGroupInfo()}
-      </div>
-      <div style="display:flex; align-items:center; gap:1.25rem;">
-        ${renderPlatformAdminToggle()}
-        ${renderConnectionBadge()}
-        <button id="logoutButton" class="secondary">Sair</button>
-      </div>
-    </header>
+    <div class="app-layout">
+      ${renderSidebarWrapper()}
 
-    ${renderRoleSwitcherNav()}
+      <div class="main-content-wrapper">
+        ${renderTopHeaderBar()}
+        ${renderCategoryPillBar()}
 
-    <div class="dashboard-grid">
-      ${!appState.group ? `
-        <div style="grid-column: span 2; display:flex; flex-direction:column; gap:1.5rem;">
-          <section class="card" style="text-align:center; padding:3.5rem 2rem;">
-            <img src="assets/coffee-hero.svg" alt="Café" style="max-height:140px; margin-bottom:1.5rem; opacity:0.85;" />
-            <h2 style="font-family:'Playfair Display', serif; font-size:1.75rem; margin-bottom:0.75rem;">Modo de Auditoria Geral</h2>
-            <p style="color:var(--muted); max-width:560px; margin:0 auto 1.75rem; font-size:0.95rem; line-height:1.6;">
-              Você está conectado como Administrador do Site. Selecione um grupo no menu superior para visualizar seu painel de compras coletivas, pedidos e consumo de membros.
-            </p>
-            <div style="display:flex; justify-content:center; gap:1rem;">
-              <button id="cardGoToSuperBtn" class="primary" style="background:linear-gradient(135deg, #7c2d12, #c2410c); padding:0.6rem 1.2rem;">Abrir Painel Geral do Site</button>
-            </div>
-          </section>
-        </div>
-      ` : `
-        <div style="display:flex; flex-direction:column; gap:1.5rem;">
-          ${(appState.activeRoleView === 'supplier') ? renderSupplierDashboardSection() : ''}
+        <div class="main-workspace-content" style="padding: 1.5rem 1.5rem 6rem;">
+          ${renderDigitalMenuSection()}
 
-          ${(appState.activeRoleView === 'leader' || (appState.activeRoleView === 'auto' && isAdmin)) ? `
-            ${renderCollectiveGoalWidget()}
-            ${renderAdminOrdersSection()}
-            ${renderTopRatedCoffeesSpotlight()}
-            ${renderAdminParticipationsSection()}
-            ${renderUserOrdersSection()}
-          ` : ''}
+          <div style="margin-top: 2rem; display:flex; flex-direction:column; gap:1.5rem;">
+            ${(appState.activeRoleView === 'supplier') ? renderSupplierDashboardSection() : ''}
 
-          ${(!appState.activeRoleView || appState.activeRoleView === 'buyer' || (appState.activeRoleView === 'auto' && !isAdmin && !isSupplier)) ? `
-            ${renderCollectiveGoalWidget()}
-            ${renderTopRatedCoffeesSpotlight()}
-            ${renderSensoryCatalogWidget()}
-            ${renderUserOrdersSection()}
-            ${renderUserParticipationsSection()}
-          ` : ''}
+            ${(appState.activeRoleView === 'leader' || (appState.activeRoleView === 'auto' && isAdmin)) ? `
+              ${renderCollectiveGoalWidget()}
+              ${renderAdminOrdersSection()}
+              ${renderTopRatedCoffeesSpotlight()}
+              ${renderAdminParticipationsSection()}
+              ${renderUserOrdersSection()}
+            ` : ''}
 
-          ${renderPromotionsCarousel()}
-          ${renderBaristaAiWidget()}
+            ${(!appState.activeRoleView || appState.activeRoleView === 'buyer' || (appState.activeRoleView === 'auto' && !isAdmin && !isSupplier)) ? `
+              ${renderCollectiveGoalWidget()}
+              ${renderTopRatedCoffeesSpotlight()}
+              ${renderUserOrdersSection()}
+              ${renderUserParticipationsSection()}
+            ` : ''}
 
-          <section class="card">
-            <div class="section-title">
-              <h2>Classifique suas Experiências</h2>
-            </div>
-            <form id="reviewForm" class="review-form">
-              <div style="display:grid; grid-template-columns:1.2fr 0.8fr; gap:0.75rem;">
-                <select id="reviewCoffee" required>
-                  <option value="">Selecione um café degustado</option>
-                  ${appState.orders.map((o) => `<option value="${o.type}">${o.type}</option>`).join('')}
-                </select>
-                <select id="reviewRating" required>
-                  <option value="">Nota</option>
-                  <option value="5">5 ★ ★ ★ ★ ★</option>
-                  <option value="4">4 ★ ★ ★ ★</option>
-                  <option value="3">3 ★ ★ ★</option>
-                  <option value="2">2 ★ ★</option>
-                  <option value="1">1 ★</option>
-                </select>
+            ${renderPromotionsCarousel()}
+            ${renderBaristaAiWidget()}
+
+            <section class="card">
+              <div class="section-title">
+                <h2>Resumo Geral & Métricas do Grupo</h2>
               </div>
-              <textarea id="reviewNote" rows="2" placeholder="Descreva notas de torra, sabor, acidez..." required></textarea>
-              <button type="submit" class="primary">Salvar Avaliação</button>
-            </form>
-
-            <div class="review-grid" id="reviewList"></div>
-          </section>
-        </div>
-
-        <div style="display:flex; flex-direction:column; gap:1.5rem;">
-          <section class="card">
-            <div class="section-title">
-              <h2>Resumo Geral</h2>
-            </div>
-            <div class="metric-card">
-              <h3>Métricas do Grupo</h3>
-              <div class="metric-list">
-                ${isAdmin ? `
-                  <div class="metric-item"><span>Pedidos Abertos</span><strong>${activeOrdersCount}</strong></div>
-                  <div class="metric-item"><span>Pagamentos Pendentes</span><strong>${pendingPaymentsCount}</strong></div>
-                  <div class="metric-item"><span>Total Participantes</span><strong>${ranking.length}</strong></div>
-                ` : `
-                  <div class="metric-item"><span>Total Adquirido</span><strong>${totalConsumed.toFixed(2)} kg</strong></div>
-                  <div class="metric-item"><span>Valor Investido</span><strong>R$ ${totalSpent.toFixed(2)}</strong></div>
-                  <div class="metric-item"><span>Sabor Favorito</span><strong>${appState.reviews[0]?.coffee || 'Nenhum'}</strong></div>
-                `}
+              <div class="metric-card">
+                <div class="metric-list">
+                  ${isAdmin ? `
+                    <div class="metric-item"><span>Pedidos Abertos</span><strong>${activeOrdersCount}</strong></div>
+                    <div class="metric-item"><span>Pagamentos Pendentes</span><strong>${pendingPaymentsCount}</strong></div>
+                    <div class="metric-item"><span>Total Participantes</span><strong>${ranking.length}</strong></div>
+                  ` : `
+                    <div class="metric-item"><span>Total Adquirido</span><strong>${totalConsumed.toFixed(2)} kg</strong></div>
+                    <div class="metric-item"><span>Valor Investido</span><strong>R$ ${totalSpent.toFixed(2)}</strong></div>
+                    <div class="metric-item"><span>Sabor Favorito</span><strong>${appState.reviews[0]?.coffee || 'Nenhum'}</strong></div>
+                  `}
+                </div>
               </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="section-title">
-              <h2>Consumo do Grupo</h2>
-            </div>
-            <ul class="rank-list">
-              ${ranking.map((entry, index) => `
-                <li>
-                  <span>#${index + 1} ${entry.displayName}</span>
-                  <strong>${entry.totalKg.toFixed(2)} kg</strong>
-                </li>
-              `).join('')}
-            </ul>
-          </section>
+            </section>
+          </div>
         </div>
-      `}
+
+        ${renderFloatingCartBar()}
+      </div>
     </div>
-
-    <section class="card" style="margin-top: 1.5rem">
-      <div class="section-title">
-        <h2>Extração do Café Especial</h2>
-      </div>
-      <div class="tech-grid">
-        <article class="tech-card">
-          <div class="tech-card-image">
-            <img src="assets/espresso.png" alt="Método Espresso" loading="lazy" />
-          </div>
-          <div class="tech-card-content">
-            <h3>Espresso</h3>
-            <p>Extração rápida e intensa, ideal para quem gosta de um café concentrado e com corpo forte.</p>
-            <ul>
-              <li>Pressão alta (9 bar)</li>
-              <li>Tempo curto (25-30s)</li>
-              <li>Perfis encorpados e crema</li>
-            </ul>
-          </div>
-        </article>
-        <article class="tech-card">
-          <div class="tech-card-image">
-            <img src="assets/aeropress.png" alt="Método Aeropress" loading="lazy" />
-          </div>
-          <div class="tech-card-content">
-            <h3>Aeropress</h3>
-            <p>Uma técnica limpa e versátil, perfeita para explorar sabores com mais clareza e equilíbrio.</p>
-            <ul>
-              <li>Filtro de papel ou metal</li>
-              <li>Imersão + pressão manual</li>
-              <li>Finalização extremamente limpa</li>
-            </ul>
-          </div>
-        </article>
-        <article class="tech-card">
-          <div class="tech-card-image">
-            <img src="assets/v60.png" alt="Método Hario V60" loading="lazy" />
-          </div>
-          <div class="tech-card-content">
-            <h3>Hario V60</h3>
-            <p>O método de filtro em dripper destaca a complexidade aromática do café, com ótima precisão.</p>
-            <ul>
-              <li>Fluxo de água centralizado</li>
-              <li>Notas florais e frutadas acentuadas</li>
-              <li>Corpo leve e acidez brilhante</li>
-            </ul>
-          </div>
-        </article>
-        <article class="tech-card">
-          <div class="tech-card-image">
-            <img src="assets/french-press.png" alt="Método French Press" loading="lazy" />
-          </div>
-          <div class="tech-card-content">
-            <h3>French Press</h3>
-            <p>Reúne sabor, textura e uma experiência mais encorpada, excelente para cafés mais robustos.</p>
-            <ul>
-              <li>Imersão total (4 minutos)</li>
-              <li>Filtro metálico preserva óleos essenciais</li>
-              <li>Bebida densa e aromática</li>
-            </ul>
-          </div>
-        </article>
-      </div>
-    </section>
   `;
 
-  // Bind Common Header View Events
-  document.getElementById('logoutButton')?.addEventListener('click', async () => {
+  // Bind Alternador de Tema (Modo Claro / Modo Escuro)
+  document.getElementById('themeToggleBtn')?.addEventListener('click', toggleTheme);
+
+  // Bind Badge do Nome do Grupo
+  document.getElementById('topGroupNameBadge')?.addEventListener('click', () => {
+    const groupName = appState.group ? appState.group.name : 'Grupo Moema - SP';
+    const groupCode = appState.group ? appState.group.code : 'CF-8821';
+    showToast(`👥 Grupo Atual: ${groupName} | Convite: ${groupCode}`, 'success');
+  });
+
+  // Bind Botão do Menu Mobile (Sidebar Drawer)
+  document.getElementById('toggleMobileSidebarBtn')?.addEventListener('click', () => {
+    appState.mobileSidebarOpen = !appState.mobileSidebarOpen;
+    render();
+  });
+
+  // Bind Filtro de Categorias (Pílulas)
+  document.querySelectorAll('[data-category]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      appState.selectedCategory = e.currentTarget.getAttribute('data-category');
+      render();
+    });
+  });
+
+  // Bind Botão "+ 1kg ao Carrinho"
+  document.querySelectorAll('[data-add-cart]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const coffeeId = e.currentTarget.getAttribute('data-add-cart');
+      addToCart1kg(coffeeId);
+    });
+  });
+
+  // Bind Botão "Saiba mais ∨" (Expandir Descrição)
+  document.querySelectorAll('[data-toggle-expand]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = e.currentTarget.getAttribute('data-toggle-expand');
+      appState.expandedCardId = appState.expandedCardId === id ? null : id;
+      render();
+    });
+  });
+
+  // Bind Links do Sidebar por Perfil
+  document.querySelectorAll('[data-nav-section]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      appState.activeNavSection = e.currentTarget.getAttribute('data-nav-section');
+      appState.mobileSidebarOpen = false;
+      render();
+    });
+  });
+
+  // Bind Logout no Sidebar
+  document.getElementById('sidebarLogoutBtn')?.addEventListener('click', async () => {
     appState.loading = true;
     render();
     if (appState.firebaseMode) {
@@ -2273,6 +2737,137 @@ function render() {
     }
     appState.loading = false;
     render();
+  });
+
+  // Bind Botão do Estado Vazio "+ Cadastrar Primeiro Café"
+  document.getElementById('btnEmptyAddCoffee')?.addEventListener('click', () => {
+    showAddCoffeeModal();
+  });
+
+  // Bind Compartilhar Lote
+  document.getElementById('shareGroupBtn')?.addEventListener('click', () => {
+    const code = appState.group?.code || 'CF-8821';
+    navigator.clipboard.writeText(code);
+    showToast(`📋 Convite do Grupo (${code}) copiado para a área de transferência!`, 'success');
+  });
+
+  // Bind Carrinho Interativo com Edição de Quantidade (kg)
+  document.getElementById('openCartCheckoutBtn')?.addEventListener('click', () => {
+    const renderCartModalContent = () => {
+      const totalPkg = appState.cart.reduce((sum, i) => sum + i.packagesKg, 0);
+      const totalPrice = appState.cart.reduce((sum, i) => sum + (i.pricePerKg * i.packagesKg), 0);
+
+      return `
+        <div id="cartModalContainer">
+          <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1.25rem;">
+            Ajuste a quantidade em <strong>pacotes de 1kg</strong> antes de confirmar sua participação no lote.
+          </p>
+
+          <div style="display:flex; flex-direction:column; gap:0.85rem; margin-bottom:1.5rem; max-height:260px; overflow-y:auto;">
+            ${appState.cart.map(item => `
+              <div class="cart-item-row" data-cart-id="${item.coffeeId}">
+                <div class="cart-item-row-info">
+                  <strong>${item.title}</strong>
+                  <span>R$ ${item.pricePerKg.toFixed(2)} / 1kg</span>
+                </div>
+
+                <div class="cart-qty-stepper">
+                  <button type="button" class="cart-qty-btn cart-qty-minus" data-id="${item.coffeeId}">-</button>
+                  <input type="text" class="cart-qty-input" value="${item.packagesKg}" readonly />
+                  <button type="button" class="cart-qty-btn cart-qty-plus" data-id="${item.coffeeId}">+</button>
+                  <button type="button" class="cart-remove-btn" data-remove-id="${item.coffeeId}" title="Remover item">🗑️</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+
+          <div style="border-top:1px solid var(--border); padding-top:1rem; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <span style="font-size:0.8rem; color:var(--muted); display:block;">Total do Pedido (${totalPkg} kg)</span>
+              <strong style="font-size:1.3rem; color:var(--accent);" class="tabular-num">R$ ${totalPrice.toFixed(2)}</strong>
+            </div>
+            <span style="font-size:0.78rem; color:var(--success); font-weight:700; background:var(--accent-light); padding:0.3rem 0.6rem; border-radius:6px;">
+              ⚡ Economia de Frete Rates
+            </span>
+          </div>
+        </div>
+      `;
+    };
+
+    showModal({
+      title: '🛍️ Meu Carrinho — Compra Coletiva (Pacotes de 1kg)',
+      body: renderCartModalContent(),
+      confirmText: 'Confirmar Pedido & Gerar Pix ⚡',
+      cancelText: 'Continuar Escolhendo',
+      onConfirm: async () => {
+        if (appState.cart.length === 0) {
+          showToast('Seu carrinho está vazio!', 'error');
+          return;
+        }
+
+        const totalPkg = appState.cart.reduce((sum, i) => sum + i.packagesKg, 0);
+        const totalPrice = appState.cart.reduce((sum, i) => sum + (i.pricePerKg * i.packagesKg), 0);
+
+        // Criar participação no lote ativo
+        const activeOrder = appState.orders.find(o => o.status === 'aberto') || appState.orders[0];
+        const newParticipation = {
+          id: `part_${Date.now()}`,
+          orderId: activeOrder?.id || 'default_order',
+          userId: appState.user?.uid || 'guest_user',
+          userName: appState.profile?.name || appState.user?.displayName || 'Participante',
+          quantityKg: totalPkg,
+          valueTotal: totalPrice,
+          paymentStatus: 'pendente',
+          items: [...appState.cart],
+          createdAt: new Date().toISOString()
+        };
+
+        appState.participations.push(newParticipation);
+        if (activeOrder) {
+          activeOrder.currentKg = (activeOrder.currentKg || 0) + totalPkg;
+        }
+
+        clearCart();
+        showToast(`⚡ Pedido de ${totalPkg}kg confirmado! Chave Pix gerada.`, 'success');
+        render();
+      }
+    });
+
+    // Vincular botões de incremento/decremento dentro do modal
+    setTimeout(() => {
+      document.querySelectorAll('.cart-qty-minus').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          updateCartQuantity(id, -1);
+          const modalBody = document.getElementById('cartModalContainer');
+          if (modalBody && appState.cart.length > 0) {
+            modalBody.outerHTML = renderCartModalContent();
+          }
+        });
+      });
+
+      document.querySelectorAll('.cart-qty-plus').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          updateCartQuantity(id, 1);
+          const modalBody = document.getElementById('cartModalContainer');
+          if (modalBody) {
+            modalBody.outerHTML = renderCartModalContent();
+          }
+        });
+      });
+
+      document.querySelectorAll('.cart-remove-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = e.currentTarget.getAttribute('data-remove-id');
+          removeFromCart(id);
+          const modalBody = document.getElementById('cartModalContainer');
+          if (modalBody && appState.cart.length > 0) {
+            modalBody.outerHTML = renderCartModalContent();
+          }
+        });
+      });
+    }, 100);
   });
 
   document.getElementById('toggleSuperAdminViewBtn')?.addEventListener('click', toggleSuperAdminView);
@@ -4139,11 +4734,14 @@ function renderAdminOrdersSection() {
       </div>
 
       <div style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:center;">
+        <button id="btnLeaderAddCoffee" class="primary" style="font-size:0.85rem; padding:0.55rem 1.1rem; background:var(--accent);">
+          ☕ + Cadastrar Novo Café no Lote
+        </button>
+        <button id="newOrderButton" class="secondary" style="font-size:0.85rem; padding:0.55rem 1.15rem;">
+          📦 + Iniciar Nova Compra Coletiva
+        </button>
         <button id="viewSupplierHistoryBtn" class="secondary" style="font-size:0.8rem; padding:0.5rem 0.9rem;" title="Ver fornecedores e histórico de preços">
           📜 Fornecedores
-        </button>
-        <button id="newOrderButton" class="primary" style="font-size:0.85rem; padding:0.55rem 1.15rem;">
-          ☕ + Iniciar Nova Compra Coletiva
         </button>
       </div>
 
@@ -5117,6 +5715,10 @@ function renderModalCoffeeBlocks(coffees, uniqueSuppliers = []) {
     </div>
   `).join('');
 }
+
+  document.getElementById('btnLeaderAddCoffee')?.addEventListener('click', () => {
+    showAddCoffeeModal();
+  });
 
   document.getElementById('newOrderButton')?.addEventListener('click', () => {
     const uniqueSuppliers = Array.from(new Set((appState.supplierHistory || []).map(sh => sh.supplierName)));
