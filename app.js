@@ -563,149 +563,149 @@ async function initializeFirebase() {
     return;
   }
 
-  try {
-    window.firebase.initializeApp(config);
-    const db = window.firebase.firestore();
-    try {
-      await db.enablePersistence();
-    } catch (err) {
-      if (err.code === 'failed-precondition') {
-        console.warn("Múltiplas abas abertas: persistência offline desativada.");
-      } else if (err.code === 'unimplemented') {
-        console.warn("Navegador não suporta persistência local.");
-      }
-    }
-    const conn = await testFirebaseConnection();
-    if (conn.success) {
-      appState.firebaseMode = true;
-      appState.firebaseError = null;
-    } else {
-      appState.firebaseMode = false;
-      appState.firebaseError = `Erro de Conexão Firestore: ${conn.error}`;
-      loadLocalData();
+  // Timer de segurança: garante que se algo travar a rede, a tela de carregamento saia em no máximo 2.5 segundos
+  const safetyTimeout = setTimeout(() => {
+    if (appState.loading) {
+      console.warn("Timeout de segurança ativado: liberando interface do aplicativo.");
       appState.loading = false;
       render();
-      return;
     }
+  }, 2500);
+
+  try {
+    window.firebase.initializeApp(config);
+    const auth = window.firebase.auth();
+    const db = window.firebase.firestore();
+
+    // -------------------------------------------------------------------------
+    // REGISTRO IMEDIATO DOS LISTENERS DE AUTENTICAÇÃO
+    // Registra onAuthStateChanged e onIdTokenChanged ANTES das chamadas de rede,
+    // garantindo resolução instantânea do estado de login.
+    // -------------------------------------------------------------------------
+    auth.onIdTokenChanged(async (user) => {
+      if (user) {
+        try {
+          appState.idToken = await user.getIdToken(false);
+        } catch (e) {
+          console.warn('[Security] Falha ao obter ID Token:', e.message);
+        }
+      } else {
+        appState.idToken = null;
+      }
+    });
+
+    auth.onAuthStateChanged(async (user) => {
+      clearTimeout(safetyTimeout);
+      appState.loading = true;
+      render();
+
+      if (user) {
+        appState.user = user;
+        try {
+          const profileDoc = await db.collection('users').doc(user.uid).get();
+          const defaultRole = window.adminEmail && user.email?.toLowerCase() === window.adminEmail.toLowerCase() ? 'admin' : 'user';
+          const canCreateGroup = defaultRole === 'admin';
+          
+          let profile = {
+            name: user.displayName || user.email?.split('@')[0] || 'Usuário',
+            role: defaultRole,
+            groupId: null,
+            canCreateGroup,
+            requestStatus: 'none',
+            createdAt: new Date().toISOString()
+          };
+
+          if (profileDoc.exists) {
+            profile = { ...profile, ...profileDoc.data() };
+          } else {
+            await db.collection('users').doc(user.uid).set(profile);
+          }
+
+          appState.profile = profile;
+
+          if (profile.groupId) {
+            const groupDoc = await db.collection('groups').doc(profile.groupId).get();
+            if (groupDoc.exists) {
+              appState.group = { id: groupDoc.id, ...groupDoc.data() };
+              const actualRole = appState.group.adminId === user.uid ? 'admin' : 'user';
+              if (profile.role !== actualRole) {
+                profile.role = actualRole;
+                await db.collection('users').doc(user.uid).update({ role: actualRole });
+              }
+              await loadFirebaseData(user.uid);
+              requestNotificationPermission();
+            } else {
+              profile.groupId = null;
+              profile.role = 'user';
+              await db.collection('users').doc(user.uid).update({ groupId: null, role: 'user' });
+              appState.group = null;
+              showToast("O grupo anterior não foi encontrado ou foi excluído.", "warning");
+            }
+          } else {
+            appState.group = null;
+            appState.orders = [];
+            appState.participations = [];
+          }
+
+          if (isPlatformAdmin()) {
+            await loadPlatformGroups();
+          }
+        } catch (error) {
+          console.error("Erro ao sincronizar perfil do Firebase:", error);
+          showToast(`Erro de perfil: ${error.message}`, 'error');
+        }
+      } else {
+        appState.user = null;
+        appState.profile = null;
+        appState.group = null;
+        appState.orders = [];
+        appState.participations = [];
+        appState.reviews = [];
+        appState.currentView = 'dashboard';
+        if (ordersUnsubscribe) {
+          ordersUnsubscribe();
+          ordersUnsubscribe = null;
+        }
+      }
+
+      appState.loading = false;
+      render();
+    });
+
+    // Testar conexão Firestore de forma não-bloqueante em segundo plano
+    testFirebaseConnection().then(conn => {
+      if (conn.success) {
+        appState.firebaseMode = true;
+        appState.firebaseError = null;
+      } else {
+        appState.firebaseMode = false;
+        appState.firebaseError = `Modo Local Ativado (Firestore: ${conn.error})`;
+        loadLocalData();
+      }
+      render();
+    }).catch(err => {
+      appState.firebaseMode = false;
+      appState.firebaseError = `Modo Local Ativado`;
+      loadLocalData();
+      render();
+    });
+
+    // Carregar produtos de fornecedores em segundo plano
+    db.collection('products').get().then(productsSnap => {
+      appState.products = productsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      render();
+    }).catch(err => {
+      console.warn("Produtos de fornecedores em modo offline:", err.message);
+    });
+
   } catch (error) {
+    clearTimeout(safetyTimeout);
     appState.firebaseMode = false;
-    appState.firebaseError = `Erro de Inicialização SDK: ${error.message}`;
+    appState.firebaseError = `Erro de Inicialização: ${error.message}`;
     loadLocalData();
     appState.loading = false;
     render();
-    return;
   }
-
-  const auth = window.firebase.auth();
-  const db = window.firebase.firestore();
-
-
-  // Load active promotions on startup for both guest and authenticated views
-  try {
-    const productsSnap = await db.collection('products')
-      .where('deadline', '>=', new Date().toISOString().slice(0, 10))
-      .get();
-    appState.products = productsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (err) {
-    console.error("Erro ao carregar produtos parceiros no inicio:", err);
-  }
-
-  // -------------------------------------------------------------------------
-  // PONTO 1 — Renovação automática de token
-  // O Firebase renova o ID Token a cada ~1h. Este listener sincroniza o token
-  // fresco para uso em chamadas autenticadas (ex: Cloud Functions, APIs).
-  // -------------------------------------------------------------------------
-  auth.onIdTokenChanged(async (user) => {
-    if (user) {
-      try {
-        appState.idToken = await user.getIdToken(false);
-        console.debug('[Security] ID Token sincronizado/renovado.');
-      } catch (e) {
-        console.warn('[Security] Falha ao obter ID Token:', e.message);
-      }
-    } else {
-      appState.idToken = null;
-    }
-  });
-
-  auth.onAuthStateChanged(async (user) => {
-    appState.loading = true;
-    render();
-
-    if (user) {
-      appState.user = user;
-      try {
-        const profileDoc = await db.collection('users').doc(user.uid).get();
-        const defaultRole = window.adminEmail && user.email?.toLowerCase() === window.adminEmail.toLowerCase() ? 'admin' : 'user';
-        const canCreateGroup = defaultRole === 'admin';
-        
-        let profile = {
-          name: user.displayName || user.email?.split('@')[0] || 'Usuário',
-          role: defaultRole,
-          groupId: null,
-          canCreateGroup,
-          requestStatus: 'none',
-          createdAt: new Date().toISOString()
-        };
-
-        if (profileDoc.exists) {
-          profile = { ...profile, ...profileDoc.data() };
-        } else {
-          await db.collection('users').doc(user.uid).set(profile);
-        }
-
-        appState.profile = profile;
-
-        // Fetch active group if associated
-        if (profile.groupId) {
-          const groupDoc = await db.collection('groups').doc(profile.groupId).get();
-          if (groupDoc.exists) {
-            appState.group = { id: groupDoc.id, ...groupDoc.data() };
-            const actualRole = appState.group.adminId === user.uid ? 'admin' : 'user';
-            if (profile.role !== actualRole) {
-              profile.role = actualRole;
-              await db.collection('users').doc(user.uid).update({ role: actualRole });
-            }
-            await loadFirebaseData(user.uid);
-            requestNotificationPermission(); // Ask for system notifications amigably
-          } else {
-            profile.groupId = null;
-            profile.role = 'user';
-            await db.collection('users').doc(user.uid).update({ groupId: null, role: 'user' });
-            appState.group = null;
-            showToast("O grupo anterior não foi encontrado ou foi excluído.", "warning");
-          }
-        } else {
-          appState.group = null;
-          appState.orders = [];
-          appState.participations = [];
-        }
-
-        // Pre-load groups for selector dropdown if platform admin
-        if (isPlatformAdmin()) {
-          await loadPlatformGroups();
-        }
-      } catch (error) {
-        console.error("Erro ao sincronizar perfil do Firebase:", error);
-        showToast(`Erro de perfil: ${error.message}`, 'error');
-      }
-    } else {
-      appState.user = null;
-      appState.profile = null;
-      appState.group = null;
-      appState.orders = [];
-      appState.participations = [];
-      appState.reviews = [];
-      appState.currentView = 'dashboard';
-      if (ordersUnsubscribe) {
-        ordersUnsubscribe();
-        ordersUnsubscribe = null;
-      }
-    }
-
-    appState.loading = false;
-    render();
-  });
 }
 
 async function loadFirebaseData(uid) {
