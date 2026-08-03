@@ -603,77 +603,90 @@ async function initializeFirebase() {
       appState.loading = true;
       render();
 
-      if (user) {
-        appState.user = user;
-        try {
-          const profileDoc = await db.collection('users').doc(user.uid).get();
-          const defaultRole = window.adminEmail && user.email?.toLowerCase() === window.adminEmail.toLowerCase() ? 'admin' : 'user';
-          const canCreateGroup = defaultRole === 'admin';
-          
-          let profile = {
-            name: user.displayName || user.email?.split('@')[0] || 'Usuário',
-            role: defaultRole,
-            groupId: null,
-            canCreateGroup,
-            requestStatus: 'none',
-            createdAt: new Date().toISOString()
-          };
+      // Timeout de segurança: se algo travar o carregamento, libera a tela em 8s
+      const authLoadingTimeout = setTimeout(() => {
+        if (appState.loading) {
+          console.warn('[Auth] Timeout de carregamento do perfil ativado — liberando interface.');
+          appState.loading = false;
+          render();
+        }
+      }, 8000);
 
-          if (profileDoc.exists) {
-            profile = { ...profile, ...profileDoc.data() };
-          } else {
-            await db.collection('users').doc(user.uid).set(profile);
-          }
+      try {
+        if (user) {
+          appState.user = user;
+          try {
+            const profileDoc = await db.collection('users').doc(user.uid).get();
+            const defaultRole = window.adminEmail && user.email?.toLowerCase() === window.adminEmail.toLowerCase() ? 'admin' : 'user';
+            const canCreateGroup = defaultRole === 'admin';
+            
+            let profile = {
+              name: user.displayName || user.email?.split('@')[0] || 'Usuário',
+              role: defaultRole,
+              groupId: null,
+              canCreateGroup,
+              requestStatus: 'none',
+              createdAt: new Date().toISOString()
+            };
 
-          appState.profile = profile;
-
-          if (profile.groupId) {
-            const groupDoc = await db.collection('groups').doc(profile.groupId).get();
-            if (groupDoc.exists) {
-              appState.group = { id: groupDoc.id, ...groupDoc.data() };
-              const actualRole = appState.group.adminId === user.uid ? 'admin' : 'user';
-              if (profile.role !== actualRole) {
-                profile.role = actualRole;
-                await db.collection('users').doc(user.uid).update({ role: actualRole });
-              }
-              await loadFirebaseData(user.uid);
-              requestNotificationPermission();
+            if (profileDoc.exists) {
+              profile = { ...profile, ...profileDoc.data() };
             } else {
-              profile.groupId = null;
-              profile.role = 'user';
-              await db.collection('users').doc(user.uid).update({ groupId: null, role: 'user' });
-              appState.group = null;
-              showToast("O grupo anterior não foi encontrado ou foi excluído.", "warning");
+              await db.collection('users').doc(user.uid).set(profile);
             }
-          } else {
-            appState.group = null;
-            appState.orders = [];
-            appState.participations = [];
-          }
 
-          if (isPlatformAdmin()) {
-            await loadPlatformGroups();
+            appState.profile = profile;
+
+            if (profile.groupId) {
+              const groupDoc = await db.collection('groups').doc(profile.groupId).get();
+              if (groupDoc.exists) {
+                appState.group = { id: groupDoc.id, ...groupDoc.data() };
+                const actualRole = appState.group.adminId === user.uid ? 'admin' : 'user';
+                if (profile.role !== actualRole) {
+                  profile.role = actualRole;
+                  await db.collection('users').doc(user.uid).update({ role: actualRole });
+                }
+                await loadFirebaseData(user.uid);
+                requestNotificationPermission();
+              } else {
+                profile.groupId = null;
+                profile.role = 'user';
+                await db.collection('users').doc(user.uid).update({ groupId: null, role: 'user' });
+                appState.group = null;
+                showToast("O grupo anterior não foi encontrado ou foi excluído.", "warning");
+              }
+            } else {
+              appState.group = null;
+              appState.orders = [];
+              appState.participations = [];
+            }
+
+            if (isPlatformAdmin()) {
+              await loadPlatformGroups();
+            }
+          } catch (error) {
+            console.error("Erro ao sincronizar perfil do Firebase:", error);
+            showToast(`Erro de perfil: ${error.message}`, 'error');
           }
-        } catch (error) {
-          console.error("Erro ao sincronizar perfil do Firebase:", error);
-          showToast(`Erro de perfil: ${error.message}`, 'error');
+        } else {
+          appState.user = null;
+          appState.profile = null;
+          appState.group = null;
+          appState.orders = [];
+          appState.participations = [];
+          appState.reviews = [];
+          appState.currentView = 'dashboard';
+          if (ordersUnsubscribe) {
+            ordersUnsubscribe();
+            ordersUnsubscribe = null;
+          }
         }
-      } else {
-        appState.user = null;
-        appState.profile = null;
-        appState.group = null;
-        appState.orders = [];
-        appState.participations = [];
-        appState.reviews = [];
-        appState.currentView = 'dashboard';
-        if (ordersUnsubscribe) {
-          ordersUnsubscribe();
-          ordersUnsubscribe = null;
-        }
+      } finally {
+        // GARANTE que o loading seja liberado, independentemente de qualquer erro
+        clearTimeout(authLoadingTimeout);
+        appState.loading = false;
+        render();
       }
-
-      appState.loading = false;
-      render();
     });
 
     // Testar conexão Firestore de forma não-bloqueante em segundo plano
@@ -724,15 +737,16 @@ async function loadFirebaseData(uid) {
       ordersUnsubscribe = null;
     }
 
-    // Bind real-time listener (onSnapshot) to orders collection
+    // -------------------------------------------------------------------------
+    // Listener em tempo real na subcoleção correta: groups/{groupId}/orders
+    // (A coleção raiz 'orders' foi depreciada com a migração para subcoleções hierárquicas)
+    // -------------------------------------------------------------------------
     let isFirstLoad = true;
-    ordersUnsubscribe = db.collection('orders')
-      .where('groupId', '==', gId)
+    ordersUnsubscribe = db.collection('groups').doc(gId).collection('orders')
       .onSnapshot((snapshot) => {
         snapshot.docChanges().forEach((change) => {
           const orderData = { id: change.doc.id, ...change.doc.data() };
           if (change.type === 'added') {
-            // Trigger OS notifications if not the initial load and created by another group administrator
             if (!isFirstLoad && orderData.createdBy !== uid) {
               triggerSystemNotification(
                 `Novo Café no grupo ${appState.group?.name || 'Coffee Experience'}!`,
@@ -747,30 +761,49 @@ async function loadFirebaseData(uid) {
         isFirstLoad = false;
         render();
       }, (error) => {
-        console.warn("Aviso na escuta de pedidos em tempo real:", error);
+        // Fallback: tenta a coleção raiz legada se a subcoleção não existir ainda
+        console.warn('[loadFirebaseData] Subcoleção groups/orders não disponível, tentando coleção legada:', error.message);
+        db.collection('orders').where('groupId', '==', gId)
+          .onSnapshot((snap) => {
+            appState.orders = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+            render();
+          }, (legacyErr) => {
+            console.warn('[loadFirebaseData] Coleção legada de orders também indisponível:', legacyErr.message);
+            appState.orders = [];
+            render();
+          });
       });
 
-    // Parallelize Firestore queries for participations, users list, products and limited reviews with robust fallbacks
+    // -------------------------------------------------------------------------
+    // Queries paralelas — usa subcoleção hierárquica com fallback para legado
+    // -------------------------------------------------------------------------
     const isAdmin = appState.profile?.role === 'admin';
-    const participationsPromise = (isAdmin
-      ? db.collection('participations').where('groupId', '==', gId).get()
-      : db.collection('participations').where('groupId', '==', gId).where('userId', '==', uid).get()
-    ).catch((err) => {
-      console.warn("Aviso ao carregar participações:", err);
-      return { docs: [] };
-    });
+
+    // Participações: tenta subcoleção hierárquica primeiro, depois legada
+    const participationsPromise = (() => {
+      const subRef = db.collection('groups').doc(gId).collection('orders');
+      // Lê todas as participações das subcoleções de cada order deste grupo
+      // Fallback para coleção raiz legada para compatibilidade com dados existentes
+      const legacyRef = isAdmin
+        ? db.collection('participations').where('groupId', '==', gId)
+        : db.collection('participations').where('groupId', '==', gId).where('userId', '==', uid);
+      return legacyRef.get().catch((err) => {
+        console.warn("Aviso ao carregar participações (legado):", err.message);
+        return { docs: [] };
+      });
+    })();
 
     const reviewsPromise = db.collection('reviews').orderBy('createdAt', 'desc').limit(10).get()
       .catch(() => db.collection('reviews').limit(10).get())
       .catch((err) => {
-        console.warn("Aviso ao carregar avaliações:", err);
+        console.warn("Aviso ao carregar avaliações:", err.message);
         return { docs: [] };
       });
 
     const loadUsers = isAdmin || isPlatformAdmin();
     const usersPromise = loadUsers
       ? db.collection('users').where('groupId', '==', gId).get().catch((err) => {
-          console.warn("Aviso ao carregar usuários:", err);
+          console.warn("Aviso ao carregar usuários:", err.message);
           return { docs: [] };
         })
       : Promise.resolve(null);
@@ -780,7 +813,7 @@ async function loadFirebaseData(uid) {
       .get()
       .catch(() => db.collection('products').get())
       .catch((err) => {
-        console.warn("Aviso ao carregar produtos:", err);
+        console.warn("Aviso ao carregar produtos:", err.message);
         return { docs: [] };
       });
 
@@ -788,7 +821,7 @@ async function loadFirebaseData(uid) {
       .where('groupId', '==', gId)
       .get()
       .catch((err) => {
-        console.warn("Aviso ao carregar histórico de fornecedores:", err);
+        console.warn("Aviso ao carregar histórico de fornecedores:", err.message);
         return { docs: [] };
       });
 
@@ -809,9 +842,10 @@ async function loadFirebaseData(uid) {
       appState.usersList = usersSnap.docs.map((doc) => ({ uid: doc.id, ...doc.data() }));
     }
   } catch (error) {
-    console.warn("Erro ao carregar dados do Firebase, mantendo estado atual:", error);
+    console.warn("Erro ao carregar dados do Firebase, mantendo estado atual:", error.message);
   }
 }
+
 
 function loadLocalData() {
   const storedOrders = localStorage.getItem('cafe-orders');
