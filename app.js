@@ -1875,6 +1875,35 @@ function renderTabStripBar() {
   `;
 }
 
+// ---------------------------------------------------------------------------
+// renderCategoryPillBar — Barra de pílulas/chips de filtro de categoria
+// Exibida logo abaixo do header, permite filtrar o cardápio de cafés.
+// ---------------------------------------------------------------------------
+function renderCategoryPillBar() {
+  const categories = [
+    { id: 'all',       label: '☕ Todos' },
+    { id: 'collective', label: '🤝 Lotes Abertos' },
+    { id: 'sca85',     label: '🏆 85+ SCA' },
+    { id: 'editions',  label: '✨ Edições Especiais' },
+    { id: 'kits',      label: '📦 Kits & Acessórios' }
+  ];
+
+  return `
+    <nav class="category-pill-bar" aria-label="Filtro de categorias de café" role="navigation">
+      ${categories.map(cat => `
+        <button
+          type="button"
+          class="category-pill ${appState.selectedCategory === cat.id ? 'active' : ''}"
+          data-category="${cat.id}"
+          aria-pressed="${appState.selectedCategory === cat.id}"
+        >
+          ${cat.label}
+        </button>
+      `).join('')}
+    </nav>
+  `;
+}
+
 function renderDigitalMenuCard(coffee) {
   const isExpanded = appState.expandedCardId === coffee.id;
 
