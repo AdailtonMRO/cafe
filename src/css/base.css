@@ -1,0 +1,93 @@
+/* =============================================================================
+   DESIGN SYSTEM - BASE TOKENS & RESET
+   App Coffee Experience
+   ============================================================================= */
+
+:root {
+  color-scheme: dark;
+  
+  /* --- Modo Escuro (Dark Mode - Padrão) --- */
+  --bg-primary: #0e0906;
+  --bg-surface: #18110c;
+  --bg-elevated: #241a13;
+  --border-color: #2e2117;
+  --border-focus: #e29339;
+  
+  --primary: #e29339;
+  --primary-hover: #fca843;
+  
+  --text-primary: #f4eee8;
+  --text-secondary: #b5a495;
+  --text-muted: #7e6e60;
+  
+  --status-success: #4caf50;
+  --status-warning: #ff9800;
+  --status-error: #f44336;
+  
+  /* Radii */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 9999px;
+  
+  /* Typography Scale Fluid Base */
+  --font-heading: 'Playfair Display', Georgia, serif;
+  --font-body: 'Sora', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  
+  --transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Modo Claro Override */
+[data-theme="light"] {
+  color-scheme: light;
+  
+  --bg-primary: #f9f6f0;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f2ebe1;
+  --border-color: #e2d7c9;
+  --border-focus: #c4731a;
+  
+  --primary: #c4731a;
+  --primary-hover: #a55c0f;
+  
+  --text-primary: #23170f;
+  --text-secondary: #5c4a3d;
+  --text-muted: #8c7868;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.9375rem; /* 15px mobile default */
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (min-width: 768px) {
+  body {
+    font-size: 1rem; /* 16px desktop default */
+  }
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-heading);
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+h1 { font-size: clamp(1.75rem, 4vw, 2.25rem); font-weight: 700; }
+h2 { font-size: clamp(1.375rem, 3vw, 1.75rem); font-weight: 600; }
+h3 { font-size: clamp(1.125rem, 2.5vw, 1.375rem); font-weight: 600; }
+h4 { font-size: clamp(1rem, 2vw, 1.125rem); font-weight: 500; }

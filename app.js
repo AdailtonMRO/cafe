@@ -459,13 +459,17 @@ function triggerSystemNotification(title, body) {
 }
 
 // Active connection test
+// Verificação de conectividade Firebase usando coleção de leitura pública (`products`).
+// Isso evita falsos negativos com regras de segurança que bloqueiam leituras sem auth.
 async function testFirebaseConnection() {
   try {
     const db = window.firebase.firestore();
-    await db.collection('orders').limit(1).get();
+    // `products` tem leitura pública nas firestore.rules (allow read: if true)
+    await db.collection('products').limit(1).get();
     return { success: true };
   } catch (error) {
     if (error.code === 'permission-denied' || error.message.includes('permission') || error.message.includes('allow')) {
+      // Regra bloqueou mas o Firebase está online — modo conectado
       return { success: true, restricted: true };
     }
     return { success: false, error: error.message || error };
@@ -2161,6 +2165,16 @@ function render() {
       render();
 
       try {
+        // Proteção contra race condition: aguarda até 3s para o Firebase resolver
+        // a verificação de conexão antes de tentar autenticar
+        if (!appState.firebaseMode && window.firebase?.apps?.length) {
+          const connectionResult = await Promise.race([
+            testFirebaseConnection(),
+            new Promise(resolve => setTimeout(() => resolve({ success: false, error: 'timeout' }), 3000))
+          ]);
+          appState.firebaseMode = connectionResult.success;
+        }
+
         if (appState.firebaseMode) {
           await handleFirebaseAuth(appState.activeAuthTab, name, email, password, requestedType);
           // Login bem-sucedido: resetar contador de tentativas
@@ -2687,6 +2701,15 @@ function render() {
   document.querySelectorAll('[data-category]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       appState.selectedCategory = e.currentTarget.getAttribute('data-category');
+      render();
+    });
+  });
+
+  // Bind Expansão Inline do Card de Café (Accordion "Saiba mais ∨" / "Ocultar ▲")
+  document.querySelectorAll('[data-toggle-expand]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const coffeeId = e.currentTarget.getAttribute('data-toggle-expand');
+      appState.expandedCardId = (appState.expandedCardId === coffeeId) ? null : coffeeId;
       render();
     });
   });

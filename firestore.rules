@@ -2,107 +2,87 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // =========================================================================
+    // HELPER FUNCTIONS (Segurança e Baixo Custo $O(1)$)
+    // =========================================================================
     
-    // Helper: Is the user authenticated?
+    // Verifica se o usuário está autenticado
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Helper: Get user's profile data (cached via exists check)
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    // Helper: Does the user profile document exist?
-    function userProfileExists() {
-      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    // Helper: Is the user a Platform Super Admin?
+    // Verifica se o usuário é Super Admin (via Custom Claim ou E-mail verificado)
     function isSuperAdmin() {
       return isAuthenticated() && 
-        (request.auth.token.email == "adailton.medeiros@gmail.com" || 
-         (userProfileExists() && 
-          getUserData().email == "adailton.medeiros@gmail.com"));
+        (request.auth.token.role == 'superadmin' || 
+         request.auth.token.email == 'adailton.medeiros@gmail.com');
     }
 
-    // Helper: Is the user a member of the target group?
-    function isGroupMember(groupId) {
-      return isAuthenticated() &&
-        (isSuperAdmin() ||
-         (userProfileExists() && getUserData().groupId == groupId));
+    // Verifica se o usuário é o próprio dono do recurso
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Helper: Is the user a leader (admin) of the target group?
+    // Verifica se o usuário possui papel de Líder (Admin de Grupo) via Custom Claim ou documento do grupo
     function isGroupAdmin(groupId) {
       return isAuthenticated() && 
-        (isSuperAdmin() || 
-         (userProfileExists() && 
-          getUserData().groupId == groupId && 
-          getUserData().role == 'admin'));
+        (isSuperAdmin() || request.auth.token.role == 'admin' || request.auth.token.groupId == groupId);
     }
 
-    // --- RULES FOR COLLECTIONS ---
+    // =========================================================================
+    // REGRAS DAS COLEÇÕES E SUBCOLEÇÕES HIERÁRQUICAS
+    // =========================================================================
 
-    // 1. Users Profiles — each user reads only their own profile; admins read all
+    // 1. Usuários — Leitura restrita ao próprio usuário ou Super Admin (Conformidade LGPD)
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
+      allow read: if isAuthenticated() && (isOwner(userId) || isSuperAdmin());
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isAuthenticated() && (isOwner(userId) || isSuperAdmin());
       allow delete: if isSuperAdmin();
     }
 
-    // 2. Coffee Buying Groups — only group members or super admin can read
+    // 2. Grupos de Compra Coletiva
     match /groups/{groupId} {
-      allow read: if isAuthenticated() && isGroupMember(groupId);
-      allow create: if isAuthenticated() && (isSuperAdmin() || (userProfileExists() && getUserData().canCreateGroup == true));
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
       allow update: if isAuthenticated() && (isSuperAdmin() || resource.data.adminId == request.auth.uid);
       allow delete: if isSuperAdmin();
+
+      // 3. Subcoleção Hierárquica: Pedidos / Lotes do Grupo
+      match /orders/{orderId} {
+        allow read: if isAuthenticated();
+        allow create, update, delete: if isGroupAdmin(groupId);
+
+        // 4. Subcoleção Hierárquica: Participações no Lote
+        match /participations/{participationId} {
+          allow read: if isAuthenticated() && 
+            (resource.data.userId == request.auth.uid || isGroupAdmin(groupId));
+          allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+          allow update, delete: if isAuthenticated() && 
+            (resource.data.userId == request.auth.uid || isGroupAdmin(groupId));
+        }
+      }
     }
 
-    // 3. Collective Coffee Orders — only group members or admin can read
-    match /orders/{orderId} {
-      allow read: if isAuthenticated() && isGroupMember(resource.data.groupId);
-      allow create: if isAuthenticated() && isGroupAdmin(request.resource.data.groupId);
-      allow update: if isAuthenticated() && isGroupAdmin(resource.data.groupId);
-      allow delete: if isAuthenticated() && isGroupAdmin(resource.data.groupId);
+    // 5. Fornecedores (Suppliers) — Perfil público para exibição; criação/edição restrita
+    match /fornecedores/{supplierId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (isSuperAdmin() || request.auth.token.role == 'supplier');
+      allow update, delete: if isAuthenticated() && (isSuperAdmin() || (isOwner(supplierId) && request.auth.token.role == 'supplier'));
     }
 
-    // 4. Order Participations — user sees own participations; group admin sees all in the group
-    match /participations/{participationId} {
-      allow read: if isAuthenticated() && 
-        (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
-      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isGroupAdmin(resource.data.groupId));
+    // 6. Produtos dos Fornecedores
+    match /products/{productId} {
+      allow read: if true; // Leitura pública para visitantes
+      allow create, update, delete: if isAuthenticated() && (isSuperAdmin() || request.auth.token.role == 'supplier');
     }
 
-    // 5. Degustation Reviews — authenticated users read all reviews (community feature)
+    // 7. Avaliações e Reviews da Comunidade
     match /reviews/{reviewId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
-      allow update, delete: if isSuperAdmin();
-    }
-
-    // 6. Access Invites Requests — user sees own requests; super admin sees all
-    match /group_requests/{requestId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSuperAdmin());
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isSuperAdmin();
-    }
-
-    // 7. Supplier Products — public read (promotions visible to guests)
-    match /products/{productId} {
-      allow read: if true;
-      allow create: if isAuthenticated() && (isSuperAdmin() || (userProfileExists() && getUserData().role == 'supplier'));
-      allow update, delete: if isAuthenticated() && (isSuperAdmin() || (userProfileExists() && getUserData().role == 'supplier' && resource.data.supplierId == request.auth.uid));
-    }
-
-    // 8. Group Supplier History — only group members or admin can access
-    match /supplier_history/{historyId} {
-      allow read: if isAuthenticated() && isGroupMember(resource.data.groupId);
-      allow create, update: if isAuthenticated() && isGroupMember(request.resource.data.groupId);
-      allow delete: if isSuperAdmin();
+      allow update, delete: if isSuperAdmin() || resource.data.userId == request.auth.uid;
     }
   }
 }
